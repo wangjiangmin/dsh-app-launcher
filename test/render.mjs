@@ -144,6 +144,39 @@ tree = exports.ProgramForm({ initial: {
 renderNode(tree)
 console.log('用例2 编辑表单：ok（组件 ' + seen.size + ' 种）')
 
+// ---- 用例 3：AppCard（程序卡片 + 验证结果）----
+// 只测表单等于没测卡片：验证结果的渲染挂在 AppCard 上，
+// 引用了不存在的组件/字段只会在点「验证」后白屏，node --check 抓不到。
+const cardProgram = {
+  id: 'comfyui', name: 'ComfyUI', enabled: true, valid: true, description: 'demo',
+  launchable: true, launchHint: '', launch: { exe: 'C:\\x\\a.exe' },
+  needs: { gpuUtilPctMax: 10 }, exclusive: 'gpu-heavy',
+  phase: 'stopped', running: false, canStop: false, stopBlockedReason: null,
+  ready: { url: 'http://127.0.0.1:8188/x' },
+}
+hookStore.length = 0
+hookIndex = 0
+seen = new Set()
+tree = exports.AppCard({
+  program: cardProgram,
+  logInfo: { path: 'x.log', tail: ['line'], size: 4, mtime: Date.now() },
+  gate: { action: 'start', ok: true, reason: null, suggestions: [] },
+  editing: false, busy: null, confirmStop: null,
+  setConfirmStop() {}, t,
+  onEdit() {}, onDelete() {}, onStart() {}, onStop() {}, onVerify() {},
+  verifyResult: {
+    ok: false, verdict: 'fail', expect: 'stopped',
+    evidence: [
+      { check: 'port', ok: false, detail: '端口 8188 被 PID 123 监听' },
+      { check: 'process', ok: true, detail: '没有相关进程存活' },
+      { check: 'ready', ok: null, detail: '跳过探针检查' },
+    ],
+    problems: ['端口 8188 仍在监听'],
+  },
+})
+renderNode(tree)
+console.log('用例3 程序卡片（含验证结果）：ok（组件 ' + seen.size + ' 种）')
+
 if (problems.length > 0) {
   console.log('\n✗ 发现渲染错误:')
   for (const p of problems) console.log('  ' + p)

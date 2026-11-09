@@ -50,6 +50,13 @@ window.__ModuleLoader__.load({
       start: '启动',
       stop: '停止',
       stopConfirm: '确认停止？',
+      verify: '验证',
+      verifyHint: '只读验证：检查端口、残留进程与就绪探针，不会启动或停止任何东西',
+      verifyResult: '验证结果',
+      verifyPass: '通过（状态符合预期）',
+      verifyFail: '未通过',
+      verifyUnknown: '证据不足，无法判定',
+      verifyProblems: '问题',
       refresh: '刷新',
       reset: '恢复默认配置',
       resetConfirm: '确认恢复为 patch 里的初始配置？当前修改会丢失',
@@ -172,6 +179,13 @@ window.__ModuleLoader__.load({
       start: 'Start',
       stop: 'Stop',
       stopConfirm: 'Confirm stop?',
+      verify: 'Verify',
+      verifyHint: 'Read-only check: port, leftover processes and readiness probe. Starts/stops nothing',
+      verifyResult: 'Verification',
+      verifyPass: 'passed (state as expected)',
+      verifyFail: 'FAILED',
+      verifyUnknown: 'not enough evidence to decide',
+      verifyProblems: 'Problems',
       refresh: 'Refresh',
       reset: 'Reset to defaults',
       resetConfirm: 'Reset to the patch seed? Current edits are lost',
@@ -406,6 +420,9 @@ window.__ModuleLoader__.load({
       body: JSON.stringify(body),
     })
 
+    /** GET，返回解包后的 body（与 run()/post() 的用法保持一致）。 */
+    const get = (path) => jsonFetch(path, { method: 'GET' })
+
     function useStatus() {
       const [data, setData] = React.useState(null)
       const [error, setError] = React.useState(null)
@@ -540,7 +557,7 @@ window.__ModuleLoader__.load({
     }
 
     // ==================== 应用卡片 ====================
-    function AppCard({ program, logInfo, gate, editing, onEdit, onDelete, onStart, onStop, busy, confirmStop, setConfirmStop, t }) {
+    function AppCard({ program, logInfo, gate, editing, onEdit, onDelete, onStart, onStop, onVerify, verifyResult, busy, confirmStop, setConfirmStop, t }) {
       const phase = PHASE[program.phase] ?? { key: 'phase_unknown', tone: 'muted' }
       const gateRunning = gate?.action === 'already-running'
       const gateOk = gate?.ok === true && !gateRunning
@@ -579,6 +596,12 @@ window.__ModuleLoader__.load({
                 if (confirmStop === program.id) { onStop(program.id); setConfirmStop(null) } else setConfirmStop(program.id)
               },
             }, confirmStop === program.id ? t('stopConfirm') : t('stop')),
+            h('button', {
+              style: S.btn,
+              disabled: Boolean(busy) || !program.enabled || !program.valid,
+              title: t('verifyHint'),
+              onClick: () => onVerify(program.id),
+            }, busy === `${program.id}:verify` ? `${t('verify')}…` : t('verify')),
             h('button', { style: S.btn, onClick: () => onEdit(editing ? null : program.id) }, editing ? t('cancel') : t('edit')),
             h('button', { style: S.btnDanger, onClick: () => onDelete(program.id) }, t('del'))),
         ),
@@ -592,6 +615,20 @@ window.__ModuleLoader__.load({
           : null,
         program.stopBlockedReason && program.running ? h('div', { style: S.tinyWarn }, program.stopBlockedReason) : null,
         gate?.ok === false && !gateRunning && program.enabled && !manualOnly ? h('div', { style: S.tinyWarn }, gate.reason) : null,
+
+        // 验证结果：把三条独立证据（端口 / 进程 / 探针）逐条摊开，
+        // 用户不用去外面跑 netstat 也能确认"到底停干净没有"。
+        verifyResult
+          ? h('div', { style: verifyResult.ok ? S.hint : S.tinyWarn },
+            h('div', { style: { fontWeight: 600 } },
+              `${t('verifyResult')}: ${verifyResult.ok ? t('verifyPass') : t('verifyFail')}` +
+              (verifyResult.verdict === 'unknown' ? `（${t('verifyUnknown')}）` : '')),
+            ...(verifyResult.evidence ?? []).map((ev, index) =>
+              h('div', { key: `ev${index}`, style: S.tiny }, `${ev.ok === null ? '·' : ev.ok ? '✓' : '✗'} ${ev.detail}`)),
+            (verifyResult.problems ?? []).length > 0
+              ? h('div', { style: S.tiny }, `${t('verifyProblems')}: ${verifyResult.problems.join('；')}`)
+              : null)
+          : null,
 
         logInfo
           ? h('details', { style: { padding: '2px 0' } },
@@ -826,6 +863,7 @@ window.__ModuleLoader__.load({
       const { config, refresh: refreshConfig } = useConfig()
       const [busy, setBusy] = React.useState(null)
       const [confirmStop, setConfirmStop] = React.useState(null)
+      const [verifyResults, setVerifyResults] = React.useState({})
       const [editing, setEditing] = React.useState(null) // 'new' | program id | null
       const [notice, setNotice] = React.useState(null)
       const [formNotice, setFormNotice] = React.useState(null)
@@ -948,6 +986,15 @@ window.__ModuleLoader__.load({
               if (body && body.ok === false) setNotice({ tone: 'error', text: body.result?.reason ?? t('stop') })
               setBusy(null)
             },
+            onVerify: async (id) => {
+              setBusy(`${id}:verify`)
+              const body = await run(() => get(`/verify?id=${encodeURIComponent(id)}`), t('verify'))
+              setBusy(null)
+              if (body && body.ok !== undefined) {
+                setVerifyResults((prev) => ({ ...prev, [id]: body }))
+              }
+            },
+            verifyResult: verifyResults[program.id],
           }),
           editing === program.id
             ? h(ErrorBoundary, { key: `form-${program.id}` },

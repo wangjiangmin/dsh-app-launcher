@@ -46,6 +46,7 @@ import {
 } from '../lib/programs.mjs'
 import { LauncherRuntime } from '../lib/runtime.mjs'
 import { registerLauncherTools } from '../lib/tools.mjs'
+import { verifyAll, verifyProgram } from '../lib/verify.mjs'
 import { isSameOrigin } from '../lib/http.mjs'
 import {
   addProgram,
@@ -737,26 +738,147 @@ await test('父链认领不放宽防误杀：无关进程仍被拒绝', async ()
   assert.match(String(res.reason), /归属未知|不是本插件启动/)
 })
 
+// ---------- verify（只读验证） ----------
+
+section('verify 只读验证')
+
+/** 构造一份最小的程序配置。 */
+function fakeProgram(overrides = {}) {
+  return {
+    id: 'comfyui',
+    name: 'ComfyUI',
+    enabled: true,
+    valid: true,
+    launch: { exe: 'C:\\Apps\\Comfy Desktop.exe' },
+    ready: { url: 'http://127.0.0.1:8188/system_stats' },
+    logFile: join(tempDir(), 'x.log'),
+    ...overrides,
+  }
+}
+
+await test('verify：停干净时判 pass，三条证据都指向"没在跑"', async () => {
+  const res = await verifyProgram(fakeProgram(), {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => [],
+      pidsByProcessName: async () => [],
+      processExePath: async () => null,
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.verdict, 'pass', `应判通过，实际 problems=${JSON.stringify(res.problems)}`)
+  assert.equal(res.problems.length, 0)
+  assert.equal(res.evidence.length, 3)
+})
+
+await test('verify：端口仍在监听时判 fail 并指出端口', async () => {
+  const res = await verifyProgram(fakeProgram(), {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => [999],
+      pidsByProcessName: async () => [999],
+      processExePath: async () => 'C:\\Apps\\Comfy Desktop.exe',
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.verdict, 'fail')
+  assert.ok(res.problems.some((p) => p.includes('8188')), `应指出端口，实际 ${JSON.stringify(res.problems)}`)
+})
+
+await test('verify：残留进程按"同名 exe"识别，不误报无关进程', async () => {
+  // 关键防误报：进程表里同时有 ComfyUI 的进程和一堆无关进程，
+  // 只应把 exe 匹配的那个算作残留。
+  const res = await verifyProgram(fakeProgram({ ready: { url: '' } }), {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => [],
+      pidsByProcessName: async () => [111, 222, 333],
+      processExePath: async (pid) => {
+        if (pid === 111) return 'C:\\Apps\\Comfy Desktop.exe' // 残留
+        if (pid === 222) return 'C:\\Other\\unrelated.exe' // 无关
+        return null // 读不到
+      },
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.verdict, 'fail', '有残留就该判失败')
+  const pids = (res.residualProcesses ?? []).map((item) => item.pid)
+  assert.deepEqual(pids, [111], `只应认出 111，实际 ${JSON.stringify(pids)}`)
+})
+
+await test('verify：后端 python 经父链算作残留，避免"壳没了后端还在"漏报', async () => {
+  // ComfyUI 场景：壳进程 111 与后端 222。按 exe 名匹配不到后端
+  // （它是 venv python），但它是 111 的后代 → 必须算残留。
+  const res = await verifyProgram(fakeProgram({ ready: { url: '' } }), {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => [],
+      pidsByProcessName: async () => [111, 222],
+      processExePath: async (pid) => (pid === 111 ? 'C:\\Apps\\Comfy Desktop.exe' : 'F:\\venv\\python.exe'),
+      parentPidOf: async (pid) => (pid === 222 ? 111 : null),
+    },
+  })
+  const pids = (res.residualProcesses ?? []).map((item) => item.pid).sort()
+  assert.deepEqual(pids, [111, 222], `壳与后端都该算残留，实际 ${JSON.stringify(pids)}`)
+})
+
+await test('verify：进程表读不到时判 unknown，不谎报"已停干净"', async () => {
+  // null（读不到）与 []（确实没有）必须严格区分：
+  // 读不到进程表时既不能说通过，也不该说失败。
+  const res = await verifyProgram(fakeProgram({ ready: { url: '' } }), {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => null,
+      pidsByProcessName: async () => null,
+      processExePath: async () => null,
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.verdict, 'unknown', '读不到证据应判 unknown')
+  assert.equal(res.ok, false)
+})
+
+await test('verifyAll：汇总多个程序并统计 passed/failed', async () => {
+  const cfg = {
+    programs: [
+      fakeProgram({ id: 'a', name: 'A', launch: { exe: 'C:\\a.exe' }, ready: { url: '' } }),
+      fakeProgram({ id: 'b', name: 'B', launch: { exe: 'C:\\b.exe' }, ready: { url: '' } }),
+    ],
+  }
+  const res = await verifyAll(cfg, {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => [],
+      pidsByProcessName: async () => [],
+      processExePath: async () => null,
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.total, 2)
+  assert.equal(typeof res.ok, 'boolean')
+  assert.equal(res.passed + res.failed + res.unknown, res.total)
+})
+
 // ---------- tools ----------
 
 section('tools')
 
-await test('注册 4 个 tool', async () => {
+await test('注册 5 个 tool', async () => {
   const registered = []
   const ctx = { tools: { register: (d) => (registered.push(d), () => {}) } }
   const dir = tempDir()
   const { deps } = makeFakeEnv()
   const runtime = makeRuntime({ sampleCacheMs: 0, programs: [{ id: 'comfyui', name: 'ComfyUI', launch: { exe: 'C:/c.exe' }, needs: { gpuUtilPctMax: 10 } }] }, deps, dir)
   const disposers = registerLauncherTools(ctx, runtime)
-  assert.equal(registered.length, 4)
-  assert.deepEqual(registered.map((d) => d.name), ['system_status', 'app_list', 'app_start', 'app_stop'])
+  assert.equal(registered.length, 5)
+  assert.deepEqual(registered.map((d) => d.name), ['system_status', 'app_list', 'app_start', 'app_stop', 'app_verify'])
   for (const def of registered) {
     assert.ok(def.description.length > 30)
     assert.equal(def.parameters.type, 'object')
     assert.equal(typeof def.execute, 'function')
     assert.equal(typeof def.output.render, 'function')
   }
-  assert.equal(disposers.length, 4)
+  assert.equal(disposers.length, 5)
 })
 
 await test('system_status 返回可读摘要', async () => {
