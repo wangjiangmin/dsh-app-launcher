@@ -1536,6 +1536,75 @@ await test('无探针程序秒退时立即失败，不误报就绪', async () =>
   assert.match(text, /\[启动失败\]/)
 })
 
+await test('启动器秒退但服务由子进程接管：应判成功，不误报失败', async () => {
+  // 实测事故（2026-11-09，LM Studio）：命令是 `lms.exe server start`（CLI
+  // 启动器），它拉起 GUI/服务后自己以 code 0 退出。日志里明确写着
+  //     Success! Server is now running on port 1234
+  //     [进程退出] code=0 存活=3329ms
+  // 旧逻辑"先查退出、后查探针"，且探针通过后还再查一次退出，
+  // 于是把一次成功启动报成失败（实际 LM Studio 有 5 个进程在跑、1234 返回 200）。
+  //
+  // 这里用真实子进程复刻该时序：子进程立刻退出，但 ready.url 指向一个
+  // 真在监听的本地 HTTP 服务（模拟"子进程接管了服务"）。
+  const http = await import('node:http')
+  const dir = tempDir()
+  let serveReady = false
+  const server = http.createServer((req, res) => {
+    if (!serveReady) {
+      // 模拟"服务还没起来"：先回 503，稍后才真的就绪
+      res.writeHead(503)
+      res.end()
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"ok":true}')
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  // 探针从第一次请求开始算，这里延迟放行：保证"启动器已退出"先发生
+  setTimeout(() => {
+    serveReady = true
+  }, 900)
+
+  try {
+    const program = normalizeProgram({
+      id: 'launcher',
+      name: 'LauncherLike',
+      launch: { exe: process.execPath, args: ['-e', 'process.exit(0)'], cwd: dir },
+      ready: { url: `http://127.0.0.1:${port}/health`, timeoutMs: 20000, intervalMs: 300 },
+      logFile: join(dir, 'launcher.log'),
+    })
+    const registry = createRegistry()
+    const state = registry.stateOf(program.id)
+    const result = await ensureRunning(program, state, { log: () => {} })
+    assert.equal(result.ready, true, '服务已就绪就该判成功')
+    // 探针先回 503、900ms 后才就绪，而启动器进程几百毫秒内就退出了，
+    // 所以这里一定走了"启动器已退出 → 继续等探针 → 探针通了 → 判成功"这条路径。
+    assert.equal(result.handoff, true, '应标记为"启动器已退出、子进程接管"')
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+await test('有探针但探针始终不通、启动器又秒退：宽限后仍判失败', async () => {
+  // 放宽不能变成"永远成功"：探针一直不通就必须如实报失败。
+  const dir = tempDir()
+  const program = normalizeProgram({
+    id: 'launcher-bad',
+    name: 'LauncherBad',
+    launch: { exe: process.execPath, args: ['-e', 'process.exit(0)'], cwd: dir },
+    // 这个端口不会有服务
+    ready: { url: 'http://127.0.0.1:9/none', timeoutMs: 20000, intervalMs: 300 },
+    logFile: join(dir, 'launcher-bad.log'),
+  })
+  const registry = createRegistry()
+  const state = registry.stateOf(program.id)
+  await assert.rejects(
+    () => ensureRunning(program, state, { log: () => {} }),
+    (error) => /进程已退出/.test(error.message),
+  )
+})
+
 await test('MIN_LIVENESS_MS 已被导出且大于 0', async () => {
   const mod = await import('../lib/programs.mjs')
   assert.ok(Number.isFinite(mod.MIN_LIVENESS_MS))
