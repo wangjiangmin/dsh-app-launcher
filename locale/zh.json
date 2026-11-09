@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "本地应用启动器",
+    "description": "检查 CPU / GPU / 内存是否空闲，空闲时按需拉起 ComfyUI、LM Studio、NInfer 等本地 AI 软件；配置一次后 Agent 可直接启动，无需二次授权。"
+  }
+}

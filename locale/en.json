@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Local App Launcher",
+    "description": "Checks CPU / GPU / RAM for heavy load and launches local AI software such as ComfyUI, LM Studio or NInfer only when the machine is idle. Configure once and the Agent can start it without a second approval."
+  }
+}

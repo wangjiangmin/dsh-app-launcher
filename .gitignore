@@ -1,0 +1,23 @@
+# 依赖与构建产物（本插件无构建步骤，但保留以防将来引入）
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时产物
+*.log
+*.log.*
+logs/
+
+# 临时/调试文件
+_*.mjs
+_*.py
+_*.js
+*.tmp
+*.bak
+*.broken
+*.new
+
+# 系统
+Thumbs.db
+.DS_Store
+desktop.ini
