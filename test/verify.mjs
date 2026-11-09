@@ -41,6 +41,8 @@ import {
   processNameOf,
   probeReady,
   listeningPids,
+  createRegistry,
+  ensureRunning,
 } from '../lib/programs.mjs'
 import { LauncherRuntime } from '../lib/runtime.mjs'
 import { registerLauncherTools } from '../lib/tools.mjs'
@@ -524,8 +526,7 @@ await test('system_status 返回可读摘要', async () => {
   assert.match(value.summary, /内存：空闲/)
 })
 
-await test('app_start 门控拒绝返回 ok:false', async () => {
-  const registered = []
+await test('app_start 门控拒绝返回 ok:false', async () => {  const registered = []
   const ctx = { tools: { register: (d) => (registered.push(d), () => {}) } }
   const dir = tempDir()
   const { deps } = makeFakeEnv({ gpu: { utilPct: 88, usedMiB: 14000, totalMiB: 16303, freeMiB: 2303 } })
@@ -827,6 +828,30 @@ await test('程序级 allowedDirs 会被持久化并读回', () => {
   assert.deepEqual(reopened.load().programs[0].allowedDirs, ['F:\\models', 'F:\\output'])
 })
 
+await test('launchable / launchHint 会被持久化并读回', () => {
+  // 同一个坑的第二个字段：漏了它，重启后又尝试代拉 → 白等一轮超时
+  const dir = tempDir()
+  const seed = {
+    programs: [{
+      id: 'comfyui', name: 'ComfyUI', launch: { exe: 'C:/c.exe' },
+      launchable: false, launchHint: '请从桌面启动',
+    }],
+  }
+  const first = createConfigStore({ seed, dataDir: dir }).load().programs[0]
+  assert.equal(first.launchable, false)
+  assert.equal(first.launchHint, '请从桌面启动')
+
+  const reopened = createConfigStore({ seed: { programs: [] }, dataDir: dir }).load().programs[0]
+  assert.equal(reopened.launchable, false)
+  assert.equal(reopened.launchHint, '请从桌面启动')
+})
+
+await test('launchable 缺省时落盘为 true', () => {
+  const dir = tempDir()
+  const seed = { programs: [{ id: 'a', name: 'A', launch: { exe: 'C:/a.exe' } }] }
+  assert.equal(createConfigStore({ seed, dataDir: dir }).load().programs[0].launchable, true)
+})
+
 // ---------- 动态挂载 ----------
 
 section('动态启用/禁用 tool')
@@ -932,6 +957,89 @@ await test('无 Origin / dsh-app: 放行', () => {
 await test('跨源与外部 Host 拒绝', () => {
   assert.equal(isSameOrigin({ headers: { host: '127.0.0.1:55053', origin: 'http://evil.com' } }), false)
   assert.equal(isSameOrigin({ headers: {} }), false)
+})
+
+// ---------- 只能手动启动的程序 ----------
+
+section('manual-only 程序')
+
+await test('launchable=false 时拒绝启动并给出原因', async () => {
+  const dir = tempDir()
+  const { deps } = makeFakeEnv()
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'comfyui', name: 'ComfyUI', launchable: false,
+      launchHint: '请从桌面图标启动',
+      launch: { exe: 'C:/c.exe' },
+      needs: { gpuUtilPctMax: 10 },
+      ready: { url: 'http://127.0.0.1:8188/x' },
+    }],
+  }, deps, dir)
+  await assert.rejects(
+    () => runtime.requestStart('comfyui'),
+    (error) => /需要手动启动/.test(error.message) && /桌面图标/.test(error.message),
+  )
+})
+
+await test('launchable 默认 true（未声明就能启动）', () => {
+  const program = normalizeProgram({ id: 'a', launch: { exe: 'C:/a.exe' } })
+  assert.equal(program.launchable, true)
+})
+
+await test('快照暴露 launchable 供界面禁用按钮', async () => {
+  const dir = tempDir()
+  const { deps } = makeFakeEnv()
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'comfyui', name: 'ComfyUI', launchable: false, launchHint: '桌面启动',
+      launch: { exe: 'C:/c.exe' }, ready: { url: 'http://127.0.0.1:8188/x' },
+    }],
+  }, deps, dir)
+  const snap = await runtime.snapshot({ fresh: true })
+  assert.equal(snap.programs[0].launchable, false)
+  assert.equal(snap.programs[0].launchHint, '桌面启动')
+})
+
+// ---------- 秒退诊断 ----------
+
+section('秒退诊断')
+
+await test('无探针程序秒退时立即失败，不误报就绪', async () => {
+  const dir = tempDir()
+  const logFile = join(dir, 'quick.log')
+  const program = normalizeProgram({
+    id: 'quick',
+    name: 'QuickQuitter',
+    launch: { exe: process.execPath, args: ['-e', 'process.exit(0)'], cwd: dir },
+    ready: { url: '', timeoutMs: 15000, intervalMs: 500 },
+    logFile,
+  })
+  const registry = createRegistry()
+  const state = registry.stateOf(program.id)
+  const started = Date.now()
+  await assert.rejects(
+    () => ensureRunning(program, state, { log: () => {} }),
+    (error) => /进程已退出/.test(error.message),
+  )
+  // 关键：不该等到 15s 超时才失败
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 8000, `应在秒级失败，实际 ${elapsed}ms`)
+
+  // 日志必须留下诊断（这是"日志空白"bug 的回归测试）
+  const { readFileSync: rf } = await import('node:fs')
+  const text = rf(logFile, 'utf8')
+  assert.match(text, /===== 启动 QuickQuitter =====/)
+  assert.match(text, /命令:/)
+  assert.match(text, /\[进程退出\]/)
+  assert.match(text, /\[启动失败\]/)
+})
+
+await test('MIN_LIVENESS_MS 已被导出且大于 0', async () => {
+  const mod = await import('../lib/programs.mjs')
+  assert.ok(Number.isFinite(mod.MIN_LIVENESS_MS))
+  assert.ok(mod.MIN_LIVENESS_MS > 0)
 })
 
 // ---------- 收尾 ----------

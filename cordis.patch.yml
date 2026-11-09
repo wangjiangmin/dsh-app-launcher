@@ -26,17 +26,20 @@
         # 正常应在每个程序自己的 allowedDirs 里配（跟着软件走），这里留空即可。
         allowedDirs: []
         programs:
-          # ComfyUI Desktop：启动路径就是软件自己的桌面程序（不是 python 加脚本）。
+          # ComfyUI Desktop：**只能从桌面手动启动**。
           #
-          # 已知限制：Desktop 版只能由 GUI 拉起。从后台/非交互进程直接执行
-          # Comfy Desktop.exe 会静默退出（退出码 0、不写日志），这是它自身
-          # 依赖 Electron 交互会话导致的，不是配置问题。
-          # 因此这里的条目用于"识别是否在跑 + 停止"；要启动请点 ComfyUI 桌面图标。
-          # 启动后后端监听 8188，插件靠这个端口判定就绪。
+          # 实测（2026-11-09）：从后台/非交互进程执行 Comfy Desktop.exe 会在
+          # 3 秒内以退出码 0 静默退出，且不产生任何输出 —— 这是 Electron 应用的
+          # 固有限制，不是配置问题。所以 launchable=false。
+          #
+          # 这个条目仍然有用：它负责**检测** ComfyUI 是否在跑（探针 8188）、
+          # 显示状态、以及在需要时停止它。启动请点桌面上的 ComfyUI 图标。
           - id: comfyui
             name: ComfyUI
             enabled: true
-            description: 图像/视频生成底座（Qwen-Image / WAN / MiniMax H3）。需从桌面图标启动；就绪后监听 8188，冷启动约 1–2 分钟。
+            launchable: false
+            launchHint: '请从桌面图标启动 ComfyUI。启动后监听 8188，冷启动约 1–2 分钟。'
+            description: 图像/视频生成底座（Qwen-Image / WAN / MiniMax H3）。需从桌面图标启动；就绪后监听 8188。
             launch:
               exe: 'C:\Users\wjm\AppData\Local\Programs\ComfyUI\Comfy Desktop\Comfy Desktop.exe'
               args: []

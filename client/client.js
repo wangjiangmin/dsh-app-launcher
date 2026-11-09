@@ -62,6 +62,8 @@ window.__ModuleLoader__.load({
       phase_stopped: '已停止',
       phase_failed: '启动失败',
       phase_unknown: '状态未知',
+      manualOnly: '需手动启动',
+      manualOnlyHint: '这个程序只能从桌面手动启动，插件不代为拉起；状态检测与停止仍然可用。',
       enabled: '启用',
       disabled: '已禁用',
       gate_ok: '可启动',
@@ -110,6 +112,9 @@ window.__ModuleLoader__.load({
       f_readyTimeout: '就绪超时（毫秒）',
       f_stopTimeout: '停止超时（毫秒）',
       f_enabled: '启用这个应用',
+      f_manualOnly: '只能手动启动（插件不代拉）',
+      f_launchHint: '手动启动说明',
+      f_launchHintTip: '会显示在卡片上，告诉用户为什么不能自动启动、该怎么启动',
       f_conflictPolicy: '资源冲突策略',
       f_conflictReject: '只拒绝并给建议（绝不杀别人的进程）',
       f_conflictStopOwn: '允许先停止本插件启动的旧程序',
@@ -179,6 +184,8 @@ window.__ModuleLoader__.load({
       phase_stopped: 'Stopped',
       phase_failed: 'Failed',
       phase_unknown: 'Unknown',
+      manualOnly: 'Manual start',
+      manualOnlyHint: 'This app can only be started from the desktop; the plugin will not launch it. Status and stop still work.',
       enabled: 'Enabled',
       disabled: 'Disabled',
       gate_ok: 'Can start',
@@ -226,6 +233,9 @@ window.__ModuleLoader__.load({
       f_readyTimeout: 'Ready timeout (ms)',
       f_stopTimeout: 'Stop timeout (ms)',
       f_enabled: 'Enable this application',
+      f_manualOnly: 'Manual start only (plugin will not launch it)',
+      f_launchHint: 'Manual start note',
+      f_launchHintTip: 'Shown on the card: why it cannot be auto-started and how to start it',
       f_conflictPolicy: 'Conflict policy',
       f_conflictReject: 'Refuse and explain (never kills foreign processes)',
       f_conflictStopOwn: 'May stop our own previous app first',
@@ -534,12 +544,17 @@ window.__ModuleLoader__.load({
       const phase = PHASE[program.phase] ?? { key: 'phase_unknown', tone: 'muted' }
       const gateRunning = gate?.action === 'already-running'
       const gateOk = gate?.ok === true && !gateRunning
-      const canStart = program.enabled && program.valid && !gateRunning && gateOk && program.phase !== 'ready' && !busy
+      // launchable=false 的程序（只能从桌面启动）不显示可点的启动按钮；
+      // 但状态检测与停止照常 —— 它被人启动后我们仍要能认出来并可停。
+      const manualOnly = program.launchable === false
+      const canStart = program.enabled && program.valid && !manualOnly &&
+        !gateRunning && gateOk && program.phase !== 'ready' && !busy
       const canStop = program.canStop && program.phase !== 'stopped'
 
       const pills = [h(Pill, { key: 'p', tone: phase.tone }, t(phase.key))]
       if (!program.enabled) pills.push(h(Pill, { key: 'd', tone: 'muted' }, t('disabled')))
       if (!program.valid) pills.push(h(Pill, { key: 'i', tone: 'error', title: program.invalidReason ?? '' }, t('invalid')))
+      if (manualOnly) pills.push(h(Pill, { key: 'm', tone: 'warn', title: program.launchHint ?? '' }, t('manualOnly')))
       if (gateRunning) pills.push(h(Pill, { key: 'g', tone: 'brand' }, t('gate_running')))
       else if (program.enabled && program.valid) {
         pills.push(h(Pill, { key: 'g', tone: gateOk ? 'success' : 'warn', title: gate?.reason ?? '' }, gateOk ? t('gate_ok') : t('gate_block')))
@@ -572,8 +587,11 @@ window.__ModuleLoader__.load({
         h('div', { style: S.pathLine, title: program.launch?.exe ?? '' }, program.launch?.exe ?? '—'),
         h('div', { style: S.pills }, pills),
         h('div', { style: S.tiny }, `${t('f_needs')}: ${describeNeeds(program.needs, t)}`),
+        manualOnly
+          ? h('div', { style: S.hint }, `${t('manualOnlyHint')}${program.launchHint ? ` ${program.launchHint}` : ''}`)
+          : null,
         program.stopBlockedReason && program.running ? h('div', { style: S.tinyWarn }, program.stopBlockedReason) : null,
-        gate?.ok === false && !gateRunning && program.enabled ? h('div', { style: S.tinyWarn }, gate.reason) : null,
+        gate?.ok === false && !gateRunning && program.enabled && !manualOnly ? h('div', { style: S.tinyWarn }, gate.reason) : null,
 
         logInfo
           ? h('details', { style: { padding: '2px 0' } },
@@ -588,6 +606,8 @@ window.__ModuleLoader__.load({
         id: '', name: '', enabled: true, description: '',
         exe: '', args: '', cwd: '', envText: '',
         allowedDirs: [],
+        launchable: true,
+        launchHint: '',
         needs: { gpuUtilPctMax: 10, freeVramMiBMin: 0, freeRamMiBMin: 0, cpuPctMax: 80 },
         exclusive: 'gpu-heavy',
         readyUrl: '', readyTimeoutMs: 180000, stopTimeoutMs: 20000,
@@ -605,6 +625,8 @@ window.__ModuleLoader__.load({
         cwd: program.launch?.cwd ?? '',
         envText: Object.entries(program.launch?.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'),
         allowedDirs: (program.allowedDirs ?? []).slice(),
+        launchable: program.launchable !== false,
+        launchHint: program.launchHint ?? '',
         needs: {
           gpuUtilPctMax: program.needs?.gpuUtilPctMax ?? '',
           freeVramMiBMin: program.needs?.freeVramMiBMin ?? '',
@@ -635,6 +657,8 @@ window.__ModuleLoader__.load({
           env: String(form.envText ?? ''),
         },
         allowedDirs: (form.allowedDirs ?? []).slice(),
+        launchable: form.launchable !== false,
+        launchHint: String(form.launchHint ?? '').trim(),
         needs: {
           gpuUtilPctMax: form.needs?.gpuUtilPctMax,
           freeVramMiBMin: form.needs?.freeVramMiBMin,
@@ -735,6 +759,21 @@ window.__ModuleLoader__.load({
         h('div', { style: S.divider }),
         h('div', { style: S.switchRow },
           h(Switch, { checked: form.enabled, onChange: (v) => set({ enabled: v }), label: t('f_enabled') })),
+        // 只能手动启动：像 ComfyUI Desktop 这类 Electron 程序，从后台起会静默秒退
+        h('div', { style: S.switchRow },
+          h(Switch, {
+            checked: form.launchable === false,
+            onChange: (v) => set({ launchable: !v }),
+            label: t('f_manualOnly'),
+          })),
+        form.launchable === false
+          ? h(Field, { label: t('f_launchHint'), hint: t('f_launchHintTip') },
+            h(TextInput, {
+              value: form.launchHint,
+              onChange: (v) => set({ launchHint: v }),
+              placeholder: t('f_launchHint'),
+            }))
+          : null,
 
         notice ? h('div', { style: noticeTone('error') }, notice) : null,
 
