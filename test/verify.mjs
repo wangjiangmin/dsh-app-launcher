@@ -859,6 +859,73 @@ await test('verifyAll：汇总多个程序并统计 passed/failed', async () => 
   assert.equal(res.passed + res.failed + res.unknown, res.total)
 })
 
+await test('verify：配置写的是启动器、实际跑的是另一个 exe，不能误判"没有进程在跑"', async () => {
+  // 实测事故（2026-11-09，LM Studio）：启动入口是
+  //   resources\app\.webpack\lms.exe（CLI 启动器，拉起 GUI 后自己就退了），
+  // 真正在跑的是 F:\program\LM Studio\LM Studio.exe（5 个 Electron 进程）。
+  // 只按 lms.exe 比对名字 → 端口在监听、探针 200，却被判「没有进程在跑」。
+  const program = fakeProgram({
+    id: 'lm-studio',
+    name: 'LM Studio',
+    launch: { exe: 'F:\\program\\LM Studio\\resources\\app\\.webpack\\lms.exe' },
+    ready: { url: 'http://127.0.0.1:1234/v1/models' },
+  })
+  const ACTUAL = 'F:\\program\\LM Studio\\LM Studio.exe'
+  const res = await verifyProgram(program, {
+    expect: 'running',
+    deps: {
+      listeningPids: async () => [23000],
+      // 按 lms.exe 找，一个也找不到（启动器已退出）
+      pidsByProcessName: async () => [],
+      // 但端口占用者是 LM Studio.exe
+      processExePath: async (pid) => (pid === 23000 ? ACTUAL : null),
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.verdict, 'pass', `应判在运行，实际 problems=${JSON.stringify(res.problems)}`)
+  const kinds = (res.residualProcesses ?? []).map((item) => item.kind)
+  assert.ok(kinds.includes('port-owner'), `端口占用者应被认领，实际 ${JSON.stringify(kinds)}`)
+})
+
+await test('verify：同程序目录下的其它 exe 也算（启动器在子目录，实际 exe 在根）', async () => {
+  // 与上一例互补：这次端口没有配置，只能靠"同一程序目录"认出来。
+  const program = fakeProgram({
+    launch: { exe: 'F:\\Apps\\Demo\\bin\\launcher.exe' },
+    ready: { url: '' },
+  })
+  const res = await verifyProgram(program, {
+    expect: 'running',
+    deps: {
+      listeningPids: async () => [],
+      pidsByProcessName: async () => [777],
+      processExePath: async () => 'F:\\Apps\\Demo\\Demo.exe',
+      parentPidOf: async () => null,
+    },
+  })
+  const kinds = (res.residualProcesses ?? []).map((item) => item.kind)
+  assert.equal(res.verdict, 'pass', `应认作同一程序，实际 problems=${JSON.stringify(res.problems)}`)
+  assert.ok(kinds.includes('same-dir'), `应标为 same-dir，实际 ${JSON.stringify(kinds)}`)
+})
+
+await test('verify：没有任何证据指向它时不算残留（放宽后仍不误报）', async () => {
+  // 上面放宽了认领口径，必须确认没把无关进程也认进来。
+  const program = fakeProgram({
+    launch: { exe: 'F:\\Apps\\Demo\\bin\\launcher.exe' },
+    ready: { url: '' },
+  })
+  const res = await verifyProgram(program, {
+    expect: 'stopped',
+    deps: {
+      listeningPids: async () => [],
+      pidsByProcessName: async () => [888],
+      processExePath: async () => 'C:\\Other\\App\\unrelated.exe',
+      parentPidOf: async () => null,
+    },
+  })
+  assert.equal(res.verdict, 'pass', '无关进程不该算残留')
+  assert.deepEqual(res.residualProcesses, [])
+})
+
 // ---------- tools ----------
 
 section('tools')
