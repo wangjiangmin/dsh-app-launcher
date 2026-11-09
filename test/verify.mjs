@@ -492,6 +492,146 @@ await test('停止只杀本插件记住的 PID', async () => {
   assert.deepEqual(killed, [])
 })
 
+await test('无端口 GUI 程序：只判自己的 PID 消失，不被同名的外部实例影响', async () => {
+  // 复现 2026-11-09 的真实事故：用户手动起的 Blender（24340）与插件起的
+  // Blender（16156）同名并存。插件只杀自己的，但旧实现杀完后仍用
+  // listeningPids 轮询"还有没有 blender.exe"——24340 一直在，而 portOf()
+  // 对无端口程序返回 null，于是必然报「端口 null 在 20000ms 内未释放」，
+  // 把一次成功的停止伪装成失败。修复后即使同名进程仍在，也应报成功。
+  const dir = tempDir()
+  const killed = []
+  const ourPid = 16156
+  const foreignPid = 24340
+  const BLENDER_EXE = 'E:\\SteamLibrary\\steamapps\\common\\Blender\\blender.exe'
+  let ourAlive = true
+
+  const listPids = async () => (ourAlive ? [foreignPid, ourPid] : [foreignPid])
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'blender',
+      name: 'Blender',
+      launch: { exe: BLENDER_EXE },
+      ready: { url: '' },
+      stopTimeoutMs: 3000,
+      logFile: join(dir, 'blender.log'),
+    }],
+  }, {
+    sysinfo: {
+      queryGpu: async () => ({ utilPct: 3, usedMiB: 500, totalMiB: 16303, freeMiB: 15803 }),
+      queryGpuName: async () => 'Fake RTX',
+      queryGpuProcesses: async () => [],
+      queryCpuLoad: async () => 6,
+    },
+    status: {
+      probeReady: async () => ({ ready: null, byProcess: true, status: null }),
+      listeningPids: listPids,
+    },
+    programs: {
+      listeningPids: listPids,
+      killProcessTree: async (pid) => {
+        killed.push(pid)
+        if (pid === ourPid) ourAlive = false
+        return { ok: true }
+      },
+      // 只有 ourPid 有 exe 路径；外部实例读不到（模拟权限不足）
+      processExePath: async (pid) => (pid === ourPid && ourAlive ? BLENDER_EXE : null),
+      pidsByProcessName: async () => (ourAlive ? [foreignPid, ourPid] : [foreignPid]),
+    },
+    edit: { probe: ALWAYS_EXISTS },
+  }, dir)
+
+  // 让 registry 记住我们的 PID，模拟本插件启动过
+  runtime.registry.stateOf('blender').child = { pid: ourPid, exitCode: null }
+
+  const res = await runtime.requestStop('blender')
+  assert.deepEqual(killed, [ourPid], '只应杀掉本插件启动的 PID')
+  assert.equal(res.stopped, true, `应报成功，实际：${res.reason}`)
+  assert.doesNotMatch(String(res.reason), /未释放/)
+  assert.doesNotMatch(String(res.reason), /端口 null/)
+})
+
+await test('无端口 GUI 程序：自己的 PID 杀不掉时明确报未退出', async () => {
+  const dir = tempDir()
+  const ourPid = 16156
+  const BLENDER_EXE = 'E:\\SteamLibrary\\steamapps\\common\\Blender\\blender.exe'
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'blender',
+      name: 'Blender',
+      launch: { exe: BLENDER_EXE },
+      ready: { url: '' },
+      stopTimeoutMs: 600,
+      logFile: join(dir, 'blender-2.log'),
+    }],
+  }, {
+    sysinfo: {
+      queryGpu: async () => ({ utilPct: 3, usedMiB: 500, totalMiB: 16303, freeMiB: 15803 }),
+      queryGpuName: async () => 'Fake RTX',
+      queryGpuProcesses: async () => [],
+      queryCpuLoad: async () => 6,
+    },
+    status: {
+      probeReady: async () => ({ ready: null, byProcess: true, status: null }),
+      listeningPids: async () => [ourPid],
+    },
+    programs: {
+      listeningPids: async () => [ourPid],
+      killProcessTree: async () => ({ ok: false, reason: '存取被拒' }),
+      processExePath: async () => BLENDER_EXE,
+      pidsByProcessName: async () => [ourPid],
+    },
+    edit: { probe: ALWAYS_EXISTS },
+  }, dir)
+  runtime.registry.stateOf('blender').child = { pid: ourPid, exitCode: null }
+
+  const res = await runtime.requestStop('blender')
+  assert.equal(res.stopped, false)
+  assert.match(String(res.reason), /未退出|停止失败/)
+})
+
+await test('无端口程序的归属文案不再出现「端口 null」', async () => {
+  // 文案事故：Blender 拒绝停止时输出「端口 null 被 PID 24340 占用」，
+  // 让人以为端口配置坏了。无端口程序的句子必须说"进程"。
+  const dir = tempDir()
+  const BLENDER_EXE = 'E:\\SteamLibrary\\steamapps\\common\\Blender\\blender.exe'
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'blender',
+      name: 'Blender',
+      launch: { exe: BLENDER_EXE },
+      ready: { url: '' },
+      stopTimeoutMs: 500,
+      logFile: join(dir, 'blender-3.log'),
+    }],
+  }, {
+    sysinfo: {
+      queryGpu: async () => ({ utilPct: 3, usedMiB: 500, totalMiB: 16303, freeMiB: 15803 }),
+      queryGpuName: async () => 'Fake RTX',
+      queryGpuProcesses: async () => [],
+      queryCpuLoad: async () => 6,
+    },
+    status: {
+      probeReady: async () => ({ ready: null, byProcess: true, status: null }),
+      listeningPids: async () => [24340],
+    },
+    programs: {
+      listeningPids: async () => [24340],
+      killProcessTree: async () => ({ ok: true }),
+      processExePath: async () => null,
+      pidsByProcessName: async () => [24340],
+    },
+    edit: { probe: ALWAYS_EXISTS },
+  }, dir)
+
+  const res = await runtime.requestStop('blender')
+  assert.equal(res.stopped, false)
+  assert.match(String(res.reason), /进程|PID/)
+  assert.doesNotMatch(String(res.reason), /端口 null/)
+})
+
 // ---------- tools ----------
 
 section('tools')
