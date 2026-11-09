@@ -1042,6 +1042,60 @@ await test('MIN_LIVENESS_MS 已被导出且大于 0', async () => {
   assert.ok(mod.MIN_LIVENESS_MS > 0)
 })
 
+// ---------- Electron 宿主环境变量 ----------
+
+section('Electron 宿主变量剔除')
+
+await test('buildChildEnv 剔除 ELECTRON_RUN_AS_NODE（否则 Electron GUI 秒退）', async () => {
+  // 2026-11-09 真事故：DSH 宿主注入该变量，子进程继承后
+  // Comfy Desktop 以纯 Node 模式启动，57ms 退出、无任何输出。
+  const mod = await import('../lib/programs.mjs')
+  const original = process.env.ELECTRON_RUN_AS_NODE
+  process.env.ELECTRON_RUN_AS_NODE = '1'
+  try {
+    const env = mod.buildChildEnv({ launch: { env: {} } }, '')
+    assert.equal(env.ELECTRON_RUN_AS_NODE, undefined, '必须剔除')
+  } finally {
+    if (original === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+    else process.env.ELECTRON_RUN_AS_NODE = original
+  }
+})
+
+await test('buildChildEnv 叠加用户显式 env 且用户优先', async () => {
+  const mod = await import('../lib/programs.mjs')
+  const env = mod.buildChildEnv({ launch: { env: { MY_VAR: 'abc', PATH: 'X' } } }, '')
+  assert.equal(env.MY_VAR, 'abc')
+  assert.equal(env.PATH, 'X', '用户显式值优先于继承值')
+})
+
+await test('buildChildEnv 按需前置 cwd 到 PATH', async () => {
+  const mod = await import('../lib/programs.mjs')
+  // Windows 环境变量名大小写不敏感：同一个变量可能以 Path/PATH 出现，
+  // 所以按大小写不敏感取值，不能硬写 .PATH
+  const readPath = (env) => {
+    const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH')
+    return key ? env[key] : undefined
+  }
+  const withPrefix = readPath(mod.buildChildEnv({ launch: { env: {}, prependCwdToPath: true } }, 'C:\\Tools'))
+  assert.ok(withPrefix?.startsWith('C:\\Tools;'), `实际: ${withPrefix}`)
+  const noPrefix = readPath(mod.buildChildEnv({ launch: { env: {}, prependCwdToPath: false } }, 'C:\\Tools'))
+  assert.ok(!noPrefix?.startsWith('C:\\Tools;'))
+})
+
+await test('strippedEnvKeys 只报告实际存在的变量', async () => {
+  const mod = await import('../lib/programs.mjs')
+  const original = process.env.ELECTRON_RUN_AS_NODE
+  delete process.env.ELECTRON_RUN_AS_NODE
+  try {
+    assert.deepEqual(mod.strippedEnvKeys(), [], '没有该变量时不该报告')
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+    assert.deepEqual(mod.strippedEnvKeys(), ['ELECTRON_RUN_AS_NODE'])
+  } finally {
+    if (original === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+    else process.env.ELECTRON_RUN_AS_NODE = original
+  }
+})
+
 // ---------- 收尾 ----------
 
 for (const dir of tmpDirs) {
