@@ -756,6 +756,17 @@ function fakeProgram(overrides = {}) {
   }
 }
 
+/**
+ * 离线探针替身：绝不联网。
+ * 测试必须与"本机某个服务此刻是否恰好在跑"无关——
+ * 曾因用了真实地址，同一份测试在不同时间得出不同结论。
+ */
+const offlineFetch = async () => {
+  throw new Error('ECONNREFUSED(offline)')
+}
+/** 假装探针可达（服务在跑）。 */
+const onlineFetch = async () => ({ status: 200, arrayBuffer: async () => new ArrayBuffer(0) })
+
 await test('verify：停干净时判 pass，三条证据都指向"没在跑"', async () => {
   const res = await verifyProgram(fakeProgram(), {
     expect: 'stopped',
@@ -764,6 +775,7 @@ await test('verify：停干净时判 pass，三条证据都指向"没在跑"', a
       pidsByProcessName: async () => [],
       processExePath: async () => null,
       parentPidOf: async () => null,
+      fetch: offlineFetch,
     },
   })
   assert.equal(res.verdict, 'pass', `应判通过，实际 problems=${JSON.stringify(res.problems)}`)
@@ -779,6 +791,7 @@ await test('verify：端口仍在监听时判 fail 并指出端口', async () =>
       pidsByProcessName: async () => [999],
       processExePath: async () => 'C:\\Apps\\Comfy Desktop.exe',
       parentPidOf: async () => null,
+      fetch: onlineFetch,
     },
   })
   assert.equal(res.verdict, 'fail')
@@ -799,6 +812,7 @@ await test('verify：残留进程按"同名 exe"识别，不误报无关进程',
         return null // 读不到
       },
       parentPidOf: async () => null,
+      fetch: offlineFetch,
     },
   })
   assert.equal(res.verdict, 'fail', '有残留就该判失败')
@@ -816,6 +830,7 @@ await test('verify：后端 python 经父链算作残留，避免"壳没了后�
       pidsByProcessName: async () => [111, 222],
       processExePath: async (pid) => (pid === 111 ? 'C:\\Apps\\Comfy Desktop.exe' : 'F:\\venv\\python.exe'),
       parentPidOf: async (pid) => (pid === 222 ? 111 : null),
+      fetch: offlineFetch,
     },
   })
   const pids = (res.residualProcesses ?? []).map((item) => item.pid).sort()
@@ -832,6 +847,7 @@ await test('verify：进程表读不到时判 unknown，不谎报"已停干净"'
       pidsByProcessName: async () => null,
       processExePath: async () => null,
       parentPidOf: async () => null,
+      fetch: offlineFetch,
     },
   })
   assert.equal(res.verdict, 'unknown', '读不到证据应判 unknown')
@@ -852,6 +868,7 @@ await test('verifyAll：汇总多个程序并统计 passed/failed', async () => 
       pidsByProcessName: async () => [],
       processExePath: async () => null,
       parentPidOf: async () => null,
+      fetch: offlineFetch,
     },
   })
   assert.equal(res.total, 2)
@@ -880,6 +897,7 @@ await test('verify：配置写的是启动器、实际跑的是另一个 exe，�
       // 但端口占用者是 LM Studio.exe
       processExePath: async (pid) => (pid === 23000 ? ACTUAL : null),
       parentPidOf: async () => null,
+      fetch: onlineFetch,
     },
   })
   assert.equal(res.verdict, 'pass', `应判在运行，实际 problems=${JSON.stringify(res.problems)}`)
@@ -900,6 +918,7 @@ await test('verify：同程序目录下的其它 exe 也算（启动器在子目
       pidsByProcessName: async () => [777],
       processExePath: async () => 'F:\\Apps\\Demo\\Demo.exe',
       parentPidOf: async () => null,
+      fetch: offlineFetch,
     },
   })
   const kinds = (res.residualProcesses ?? []).map((item) => item.kind)
@@ -920,6 +939,7 @@ await test('verify：没有任何证据指向它时不算残留（放宽后仍�
       pidsByProcessName: async () => [888],
       processExePath: async () => 'C:\\Other\\App\\unrelated.exe',
       parentPidOf: async () => null,
+      fetch: offlineFetch,
     },
   })
   assert.equal(res.verdict, 'pass', '无关进程不该算残留')
