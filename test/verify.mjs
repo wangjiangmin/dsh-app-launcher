@@ -4,7 +4,7 @@
  * 用假依赖与临时目录，不碰真实 GPU、端口或用户配置。
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -929,10 +929,56 @@ await test('app_list 对已在运行给 already-running', async () => {
   assert.equal(value.programs[0].gate.action, 'already-running')
 })
 
+await test('HTTP 门面必须覆盖 http.mjs 用到的每个成员（新增路由要同步 index.js）', async () => {
+  // 踩过的坑（2026-11-09）：mountAppLauncherRoutes 收到的不是 runtime 实例，
+  // 而是 index.js 里手写的一份门面对象，逐个方法转发。新增 verify 时忘了加，
+  // 表现是路由存在但调用报 "rt.verify is not a function"（HTTP 500）。
+  //
+  // 判定口径刻意限定在「http.mjs 实际用到的成员」：
+  //   - 门面缺了它 → 路由 500（必须抓到）
+  //   - 门面多了它、runtime 上却没有 → 转发到 undefined（也该抓到）
+  // 内部方法（_makeSampler 之类）本就不该从 HTTP 暴露，不参与此判定。
+  const indexSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const httpSrc = readFileSync(new URL('../lib/http.mjs', import.meta.url), 'utf8')
+  const runtimeSrc = readFileSync(new URL('../lib/runtime.mjs', import.meta.url), 'utf8')
+
+  const used = new Set(
+    [...httpSrc.matchAll(/(?:rt|runtime\(\))\.([A-Za-z_][\w]*)/g)].map((m) => m[1]),
+  )
+  assert.ok(used.size > 8, `应解析出 HTTP 层用到的成员，实际 ${used.size}`)
+  assert.ok(used.has('verify'), 'http.mjs 应当调用 verify')
+
+  // 门面转发的成员：可以用别名，所以两种写法都算：
+  //   xxx: (…) => runtime.xxx(…)     —— 同名转发
+  //   xxx: (…) => runtime.yyy(…)     —— 别名转发（如 statusSnapshot → snapshot）
+  //   get xxx() { … }                —— getter
+  const forwarded = new Set([
+    ...[...indexSrc.matchAll(/^\s{8}([A-Za-z_][\w]*)\s*:\s*\([^)]*\)\s*=>\s*runtime\.([A-Za-z_][\w]*)/gm)]
+      .flatMap((m) => [m[1], m[2]]),
+    ...[...indexSrc.matchAll(/get ([A-Za-z_][\w]*)\s*\(\)/g)].map((m) => m[1]),
+  ])
+
+  const missing = [...used].filter((name) => !forwarded.has(name))
+  assert.deepEqual(missing, [], `这些成员没有在 HTTP 门面里转发，调用会报 "rt.X is not a function"：${missing.join(', ')}`)
+
+  // 反向：门面里实际调用的 runtime.xxx 必须真的存在（防拼错/方法被改名）。
+  // 只用 xxx: (…) => runtime.yyy(…) 的右侧参与校验——左侧是门面对外的名字，
+  // 允许与 runtime 不同（别名，如 statusSnapshot → snapshot）。
+  const runtimeMembers = new Set([
+    ...[...runtimeSrc.matchAll(/^ {2}(?:async )?(?:get )?([A-Za-z_][\w]*)\s*\(/gm)].map((m) => m[1]),
+    ...[...runtimeSrc.matchAll(/^ {2}(?:this\.)?([A-Za-z_][\w]*)\s*=/gm)].map((m) => m[1]),
+  ])
+  const calledOnRuntime = new Set([
+    ...[...indexSrc.matchAll(/^\s{8}[A-Za-z_][\w]*\s*:\s*\([^)]*\)\s*=>\s*runtime\.([A-Za-z_][\w]*)/gm)]
+      .map((m) => m[1]),
+  ])
+  const ghosts = [...calledOnRuntime].filter((name) => !runtimeMembers.has(name))
+  assert.deepEqual(ghosts, [], `门面调用了 runtime 上不存在的方法：${ghosts.join(', ')}`)
+})
+
 // ---------- edit ----------
 
 section('edit 校验')
-
 await test('splitArgs 处理引号与空串', () => {
   assert.deepEqual(splitArgs('--port 8188'), ['--port', '8188'])
   assert.deepEqual(splitArgs('--p "D:\\my models" -x'), ['--p', 'D:\\my models', '-x'])
