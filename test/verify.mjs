@@ -632,6 +632,111 @@ await test('无端口程序的归属文案不再出现「端口 null」', async 
   assert.doesNotMatch(String(res.reason), /端口 null/)
 })
 
+await test('Electron 壳 + 子进程后端：沿父链认领后端 PID，并杀掉根进程', async () => {
+  // 复现 2026-11-09 的真实事故（ComfyUI Desktop）：
+  // 插件 spawn 的根是 Electron 壳（记住 41620），但监听 8188 的是它派生的
+  // 后端 python（22660）。精确 PID 比对不相等 → 旧实现把自己启动的服务
+  // 判成"外部进程"而拒绝停止。修复后应沿父链认领，并同时杀掉根进程，
+  // 否则 Electron 壳会变成没后端的空窗口留在任务管理器里。
+  const dir = tempDir()
+  const killed = []
+  const SHELL_PID = 41620
+  const BACKEND_PID = 22660
+  const SHELL_EXE = 'C:\\Users\\wjm\\AppData\\Local\\Programs\\ComfyUI\\Comfy Desktop\\Comfy Desktop.exe'
+  const BACKEND_EXE = 'F:\\program\\ComfyUI\\.venv\\Scripts\\python.exe'
+
+  let backendAlive = true
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'comfyui',
+      name: 'ComfyUI',
+      launch: { exe: SHELL_EXE },
+      ready: { url: 'http://127.0.0.1:8188/x', timeoutMs: 2000, intervalMs: 100 },
+      stopTimeoutMs: 2500,
+      logFile: join(dir, 'comfyui.log'),
+    }],
+  }, {
+    sysinfo: {
+      queryGpu: async () => ({ utilPct: 3, usedMiB: 500, totalMiB: 16303, freeMiB: 15803 }),
+      queryGpuName: async () => 'Fake RTX',
+      queryGpuProcesses: async () => [],
+      queryCpuLoad: async () => 6,
+    },
+    status: {
+      probeReady: async () => ({ ready: false, byProcess: false, status: null }),
+      // 端口占用者只有后端；后端被杀死后端口释放
+      listeningPids: async () => (backendAlive ? [BACKEND_PID] : []),
+    },
+    programs: {
+      listeningPids: async () => (backendAlive ? [BACKEND_PID] : []),
+      killProcessTree: async (pid) => {
+        killed.push(pid)
+        if (pid === BACKEND_PID) backendAlive = false
+        return { ok: true }
+      },
+      // 根是壳的 exe；后端是 venv python —— 两者不同
+      processExePath: async (pid) => (pid === SHELL_PID ? SHELL_EXE : BACKEND_EXE),
+      pidsByProcessName: async () => [SHELL_PID],
+      // 父链：后端 22660 的父是根 41620
+      parentPidOf: async (pid) => (pid === BACKEND_PID ? SHELL_PID : null),
+    },
+    edit: { probe: ALWAYS_EXISTS },
+  }, dir)
+
+  runtime.registry.stateOf('comfyui').child = { pid: SHELL_PID, exitCode: null }
+
+  const res = await runtime.requestStop('comfyui')
+  assert.equal(res.stopped, true, `应能停自己启动的服务，实际：${res.reason}`)
+  assert.ok(killed.includes(BACKEND_PID), `应杀掉后端 PID，实际杀了 ${killed.join(',')}`)
+  assert.ok(killed.includes(SHELL_PID), `应同时杀掉 Electron 壳，避免留空窗口，实际杀了 ${killed.join(',')}`)
+  assert.ok(!/外部进程|归属未知/.test(String(res.reason)), `不应判成外部进程：${res.reason}`)
+})
+
+await test('父链认领不放宽防误杀：无关进程仍被拒绝', async () => {
+  // 沿父链匹配必须只认"能追溯到已记录 PID"的进程。一个既非本插件启动、
+  // 父链也追溯不到根的进程，仍要拒绝停止（防 PID 复用导致误杀）。
+  const dir = tempDir()
+  const killed = []
+  const UNRELATED = 9999
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [{
+      id: 'comfyui',
+      name: 'ComfyUI',
+      launch: { exe: 'C:\\x\\Comfy Desktop.exe' },
+      ready: { url: 'http://127.0.0.1:8188/x', timeoutMs: 1000, intervalMs: 100 },
+      stopTimeoutMs: 400,
+      logFile: join(dir, 'comfyui-2.log'),
+    }],
+  }, {
+    sysinfo: {
+      queryGpu: async () => ({ utilPct: 3, usedMiB: 500, totalMiB: 16303, freeMiB: 15803 }),
+      queryGpuName: async () => 'Fake RTX',
+      queryGpuProcesses: async () => [],
+      queryCpuLoad: async () => 6,
+    },
+    status: {
+      probeReady: async () => ({ ready: false, byProcess: false, status: null }),
+      listeningPids: async () => [UNRELATED],
+    },
+    programs: {
+      listeningPids: async () => [UNRELATED],
+      killProcessTree: async (pid) => (killed.push(pid), { ok: true }),
+      processExePath: async () => 'C:\\other\\thing.exe',
+      pidsByProcessName: async () => [],
+      // 父链走到头也到不了任何"已记录 PID"
+      parentPidOf: async (pid) => (pid === UNRELATED ? 1234 : null),
+    },
+    edit: { probe: ALWAYS_EXISTS },
+  }, dir)
+
+  const res = await runtime.requestStop('comfyui')
+  assert.equal(res.stopped, false)
+  assert.deepEqual(killed, [], '外部进程一个都不该杀')
+  assert.match(String(res.reason), /归属未知|不是本插件启动/)
+})
+
 // ---------- tools ----------
 
 section('tools')
