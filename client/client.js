@@ -178,6 +178,8 @@ window.__ModuleLoader__.load({
       openPanel: '打开设置',
       workspaceUnavailable: '当前没有活动工作区，无法设置工作区级授权',
       jsonErr: '返回数据不是有效 JSON',
+      belongsToWorkspace: '所属工作区',
+      workspaceUnresolved: '未能确定所属工作区（工作区级授权此时不参与合并）',
       allowedTip: '「选择文件」只能浏览这里列出的目录。留空则无法浏览，但可以手动填路径。',
       addDir: '添加目录',
       dirPlaceholder: 'C:\\Users\\wjm\\AppData\\Local\\Programs',
@@ -340,6 +342,8 @@ window.__ModuleLoader__.load({
       openPanel: 'Open settings',
       workspaceUnavailable: 'No active workspace, so workspace-level grants are unavailable',
       jsonErr: 'Response was not valid JSON',
+      belongsToWorkspace: 'Workspace',
+      workspaceUnresolved: 'Workspace could not be resolved (workspace-level grants are not merged)',
       allowedTip: '"Browse" can only see the folders listed here. Empty means browsing is unavailable, but you can still type a path.',
       addDir: 'Add directory',
       dirPlaceholder: 'C:\\Users\\wjm\\AppData\\Local\\Programs',
@@ -1083,8 +1087,22 @@ window.__ModuleLoader__.load({
 
         // 生效范围概览（三层并集）
         info
-          ? h('div', { style: { ...S.tiny, padding: '6px 8px', borderRadius: '6px', background: 'var(--dsw-alias-bg-layer-1)' } },
-            `${t('effectiveScope')}：${info.counts.effectiveDirs} ${t('dirsUnit')} / ${info.counts.effectivePrograms} ${t('programsUnit')}`)
+          ? h('div', {
+            style: {
+              ...S.tiny, display: 'flex', flexDirection: 'column', gap: '3px',
+              padding: '6px 8px', borderRadius: '6px', background: 'var(--dsw-alias-bg-layer-1)',
+            },
+          },
+          h('div', null,
+            `${t('effectiveScope')}：${info.counts.effectiveDirs} ${t('dirsUnit')} / ${info.counts.effectivePrograms} ${t('programsUnit')}`),
+          // 会话面板里显示它属于哪个工作区 —— 用户才知道两层的层级关系
+          scope === 'session' && info.workspaceKey
+            ? h('div', { style: { opacity: 0.85 } },
+              `${t('belongsToWorkspace')}：${info.workspaceTitle || info.workspaceKey}`)
+            : null,
+          scope === 'session' && !info.workspaceKey
+            ? h('div', { style: { opacity: 0.7 } }, t('workspaceUnresolved'))
+            : null)
           : null,
 
         // 目录列表
@@ -1435,6 +1453,38 @@ window.__ModuleLoader__.load({
 
     // ==================== 作用域入口按钮 ====================
 
+    /**
+     * 会话「...」菜单里的一行：打开本会话的应用面板。
+     *
+     * 放在这里而不是侧边栏别处，是因为这是唯一开放给插件的会话菜单扩展点，
+     * 官方已在此放了 pin/rename/fork/archive；我们的行排在 archive 之后。
+     */
+    function MenuScopeRow({ t, sessionId }) {
+      const [open, setOpen] = React.useState(false)
+      return h(React.Fragment, null,
+        h('button', {
+          type: 'button',
+          role: 'menuitem',
+          style: {
+            display: 'block', width: '100%', textAlign: 'left',
+            font: 'inherit', fontSize: '12px', cursor: 'pointer',
+            padding: '5px 10px', border: 'none', background: 'transparent',
+            color: 'var(--dsw-alias-label-primary)', borderRadius: '4px',
+          },
+          onClick: (e) => { e.stopPropagation(); setOpen(true) },
+        }, `📦 ${t('navSession')}`),
+        open
+          ? h(Modal, { title: t('navSession'), width: '680px', onClose: () => setOpen(false), t },
+            h(ScopePanel, {
+              scope: 'session',
+              scopeKey: String(sessionId ?? ''),
+              title: t('navSession'),
+              subtitle: t('sessionScopeTip'),
+              t,
+            }))
+          : null)
+    }
+
     /** 会话顶部入口：点了弹出「本会话」作用域面板。 */
     function SessionScopeButton({ t, sessionId }) {
       const [open, setOpen] = React.useState(false)
@@ -1452,50 +1502,6 @@ window.__ModuleLoader__.load({
               scopeKey: String(sessionId ?? ''),
               title: t('navSession'),
               subtitle: t('sessionScopeTip'),
-              t,
-            }))
-          : null)
-    }
-
-    /**
-     * 工作区导航栏入口：弹出「工作区」作用域面板。
-     *
-     * 作用域 key 用**工作区目录路径**（不是 workspaceId）：工作区记录可以删掉重建，
-     * 路径才是稳定的，否则重建后授权就丢了。
-     */
-    function WorkspaceScopeButton({ t, useWorkspaces }) {
-      const [open, setOpen] = React.useState(false)
-      // useWorkspaces 是宿主注入的 selector hook；拿不到时退化为不可用
-      let workspacePath = ''
-      let workspaceTitle = ''
-      try {
-        const snapshot = typeof useWorkspaces === 'function' ? useWorkspaces((s) => s) : null
-        const list = snapshot?.workspaces ?? snapshot?.items ?? []
-        const current = snapshot?.current ?? snapshot?.selected ?? list[0]
-        if (current) {
-          workspacePath = String(current.path ?? current.directory ?? '')
-          workspaceTitle = String(current.title ?? '')
-        }
-      } catch {
-        workspacePath = ''
-      }
-
-      const disabled = workspacePath === ''
-      return h(React.Fragment, null,
-        h('button', {
-          style: { ...S.btn, padding: '2px 8px', fontSize: '11.5px', ...(disabled ? S.btnOff : {}) },
-          type: 'button',
-          disabled,
-          title: disabled ? t('workspaceUnavailable') : t('workspaceScopeTip'),
-          onClick: () => { if (!disabled) setOpen(true) },
-        }, `🗂 ${t('navWorkspace')}`),
-        open && !disabled
-          ? h(Modal, { title: t('navWorkspace'), width: '680px', onClose: () => setOpen(false), t },
-            h(ScopePanel, {
-              scope: 'workspace',
-              scopeKey: workspacePath,
-              title: workspaceTitle || t('navWorkspace'),
-              subtitle: t('workspaceScopeTip'),
               t,
             }))
           : null)
@@ -1536,17 +1542,29 @@ window.__ModuleLoader__.load({
       }, (props) => h(ErrorBoundary, null,
         h(SessionScopeButton, { t, sessionId: props?.sessionId }))))
 
-      // ==================== 工作区导航栏入口（影响整个工作区） ====================
-      // 挂在全局面板图标区：从 useWorkspaces 里取当前活动工作区的路径作作用域 key。
-      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-        name: 'sidebar.panellist',
-        id: `${NS}-workspace`,
-        order: 120,
-        label: () => t('navWorkspace'),
+      // ==================== 工作区入口 ====================
+      // ★ 为什么不在侧边栏工作区行里：
+      //   DSH 当前**没有开放「工作区行 / 工作区菜单」的 slot**。
+      //   `sidebar.workspaces` 是 single（要挂就得整块替换官方浏览器，replaceRisk 太高），
+      //   而 `sidebar.workspaces.session.menu.item` / `.session.row.action` 的
+      //   ownerProps 只有 sessionId，明确是"one Session row"，不是工作区行。
+      //   所以工作区级授权放在设置页，外加一个能读到工作区列表的入口（见下方会话菜单）。
+      //
+      //   之前错误地挂在 `sidebar.panellist`（面板图标区）：那里既拿不到工作区上下文，
+      //   又会因为顶替面板而影响侧边栏，属于位置选错。
+
+      // ==================== 会话「...」菜单入口（与会话的重命名/归档并列） ====================
+      // 这个 slot 就是会话行「...」菜单，官方已在这里放 pin/rename/fork/archive。
+      // 我们的行排在 archive 之后，符合"和重命名、删除放一起"的诉求。
+      ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
+        name: 'sidebar.workspaces.session.menu.item',
+        id: `${NS}-menu`,
+        order: 460,
+        label: () => t('navSession'),
         locale: NS,
         inject: () => ({ t }),
       }, (props) => h(ErrorBoundary, null,
-        h(WorkspaceScopeButton, { t, useWorkspaces: props?.useWorkspaces }))))
+        h(MenuScopeRow, { t, sessionId: props?.sessionId }))))
     }
 
     return { name: NS, inject, apply }
