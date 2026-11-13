@@ -24,11 +24,12 @@
     "README.md"
   ],
   "scripts": {
-    "verify": "node test/verify.mjs && node test/scopes.mjs && node test/workspace-scope.mjs && node test/lazy.mjs && node test/facade.mjs && node test/render.mjs",
+    "verify": "node test/verify.mjs && node test/scopes.mjs && node test/workspace-scope.mjs && node test/lazy.mjs && node test/hot-reload.mjs && node test/facade.mjs && node test/render.mjs",
     "verify:logic": "node test/verify.mjs",
     "verify:scopes": "node test/scopes.mjs",
     "verify:workspace": "node test/workspace-scope.mjs",
     "verify:lazy": "node test/lazy.mjs",
+    "verify:hot": "node test/hot-reload.mjs",
     "verify:facade": "node test/facade.mjs",
     "verify:render": "node test/render.mjs"
   },

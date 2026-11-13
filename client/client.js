@@ -1057,10 +1057,13 @@ window.__ModuleLoader__.load({
     /**
      * 一个作用域的面板：列出该层自己的目录与程序，并提供增删。
      *
-     * 三个入口（设置页 / 工作区导航栏 / 会话顶部）复用同一个组件，
+     * 三个入口（设置页 / 会话菜单 / 会话顶部）复用同一个组件，
      * 只是 `scope` 与 `scopeKey` 不同、可见的层不同。
+     *
+     * `onChanged`：保存成功后通知外层刷新（主列表要跟着变，否则在会话面板
+     * 加的程序在主列表看不到 —— 它们是同一份数据的不同视图）。
      */
-    function ScopePanel({ scope, scopeKey, title, subtitle, t, compact }) {
+    function ScopePanel({ scope, scopeKey, title, subtitle, t, compact, onChanged }) {
       const [info, setInfo] = React.useState(null)
       const [slice, setSlice] = React.useState({ allowedDirs: [], programs: [] })
       const [grants, setGrants] = React.useState([])
@@ -1100,6 +1103,10 @@ window.__ModuleLoader__.load({
           setSlice(nextSlice)
           setNotice({ tone: 'success', text: okText ?? t('savedTip') })
           await load()
+          // 通知外层：主列表 / 状态快照要跟着变（热加载的界面半边）
+          if (typeof onChanged === 'function') {
+            try { await onChanged() } catch { /* 外层刷新失败不影响本面板 */ }
+          }
           return true
         } catch (err) {
           setNotice({ tone: 'error', text: err instanceof Error ? err.message : String(err) })
@@ -1527,6 +1534,8 @@ window.__ModuleLoader__.load({
             title: t('scopeGlobal'),
             subtitle: t('globalScopeTip'),
             t,
+            // 全局层改动会改变程序列表与门控，重取一次
+            onChanged: async () => { await Promise.all([refresh(), refreshConfig()]) },
           })))
     }
 
