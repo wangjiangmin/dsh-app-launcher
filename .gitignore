@@ -26,3 +26,6 @@ desktop.ini
 __pycache__/
 *.pyc
 .git-commit-msg.txt
+
+# ????????
+_msg.txt
