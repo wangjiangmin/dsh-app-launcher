@@ -144,6 +144,40 @@ window.__ModuleLoader__.load({
       manualTip: '找不到？可直接粘贴完整路径',
       needAllowedDir: '还没有授权任何目录。请到本页底部「授权目录」添加要浏览的文件夹（只授权这几个文件夹，不是整盘）。',
       sec_allowed: '授权目录',
+      close: '关闭',
+      addProgram: '添加软件/脚本',
+      addDir: '添加目录',
+      dirAdded: '目录已加入本作用域',
+      dirRemoved: '目录已移除',
+      programAdded: '程序已加入本作用域',
+      programRemoved: '程序已移除',
+      sec_dirs: '授权目录',
+      sec_programs: '软件/脚本',
+      sec_grants: '授权记录',
+      noPrograms: '本作用域还没有添加软件/脚本',
+      noGrants: '还没有授权记录',
+      effectiveScope: '合并生效',
+      dirsUnit: '个目录',
+      programsUnit: '个程序',
+      scopeGlobal: '全局',
+      scopeWorkspace: '工作区',
+      scopeSession: '会话',
+      f_dirPath: '目录路径',
+      f_dirPathTip: '必须是绝对路径，例如 D:\\models 或 \\\\nas\\share',
+      needDirPath: '请填写目录路径',
+      needAbsolute: '必须是绝对路径（盘符开头或 UNC 路径）',
+      dirExists: '这个目录已在列表里',
+      needName: '请填写名称',
+      needExe: '请填写启动路径',
+      idExists: '这个 id 已存在',
+      navWorkspace: '工作区应用',
+      navSession: '本会话应用',
+      globalScopeTip: '对所有工作区、所有会话生效',
+      workspaceScopeTip: '只对这个工作区下的所有会话生效',
+      sessionScopeTip: '只在当前会话生效',
+      openPanel: '打开设置',
+      workspaceUnavailable: '当前没有活动工作区，无法设置工作区级授权',
+      jsonErr: '返回数据不是有效 JSON',
       allowedTip: '「选择文件」只能浏览这里列出的目录。留空则无法浏览，但可以手动填路径。',
       addDir: '添加目录',
       dirPlaceholder: 'C:\\Users\\wjm\\AppData\\Local\\Programs',
@@ -272,6 +306,40 @@ window.__ModuleLoader__.load({
       manualTip: 'Cannot find it? Paste the full path directly',
       needAllowedDir: 'No authorized directories yet. Add the folders you want to browse under "Authorized directories" below (only those folders, not the whole drive).',
       sec_allowed: 'Authorized directories',
+      close: 'Close',
+      addProgram: 'Add app/script',
+      addDir: 'Add directory',
+      dirAdded: 'Directory added to this scope',
+      dirRemoved: 'Directory removed',
+      programAdded: 'App added to this scope',
+      programRemoved: 'App removed',
+      sec_dirs: 'Authorized directories',
+      sec_programs: 'Apps / scripts',
+      sec_grants: 'Grant log',
+      noPrograms: 'No apps in this scope yet',
+      noGrants: 'No grants recorded yet',
+      effectiveScope: 'Merged effective',
+      dirsUnit: 'dirs',
+      programsUnit: 'apps',
+      scopeGlobal: 'Global',
+      scopeWorkspace: 'Workspace',
+      scopeSession: 'Session',
+      f_dirPath: 'Directory path',
+      f_dirPathTip: 'Absolute path required, e.g. D:\\models or \\\\nas\\share',
+      needDirPath: 'Enter a directory path',
+      needAbsolute: 'Must be an absolute path (drive letter or UNC)',
+      dirExists: 'That directory is already listed',
+      needName: 'Enter a name',
+      needExe: 'Enter the executable path',
+      idExists: 'That id already exists',
+      navWorkspace: 'Workspace apps',
+      navSession: 'Session apps',
+      globalScopeTip: 'Applies to every workspace and session',
+      workspaceScopeTip: 'Applies to every session in this workspace',
+      sessionScopeTip: 'Applies to this session only',
+      openPanel: 'Open settings',
+      workspaceUnavailable: 'No active workspace, so workspace-level grants are unavailable',
+      jsonErr: 'Response was not valid JSON',
       allowedTip: '"Browse" can only see the folders listed here. Empty means browsing is unavailable, but you can still type a path.',
       addDir: 'Add directory',
       dirPlaceholder: 'C:\\Users\\wjm\\AppData\\Local\\Programs',
@@ -858,6 +926,334 @@ window.__ModuleLoader__.load({
     }
 
     // ==================== 主体 ====================
+    // ==================== 弹框（覆盖层） ====================
+
+    /**
+     * 通用模态框。
+     *
+     * 为什么不用内联展开：列表很长时，展开表单会把「添加」按钮和表单拉开很远，
+     * 用户点了按钮还得往下滚才能填。弹框把表单固定在视野中央，填完关掉。
+     */
+    function Modal({ title, width, onClose, children, t }) {
+      React.useEffect(() => {
+        const onKey = (e) => { if (e.key === 'Escape') onClose() }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [onClose])
+
+      return h('div', {
+        style: {
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'color-mix(in srgb, #000 45%, transparent)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+          padding: '6vh 16px 16px', overflow: 'auto',
+        },
+        onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() },
+      },
+      h('div', {
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': title,
+        style: {
+          width: width ?? '640px', maxWidth: '100%', boxSizing: 'border-box',
+          background: 'var(--dsw-alias-bg-layer-2)',
+          border: '1px solid var(--dsw-alias-border-l2)',
+          borderRadius: '12px',
+          boxShadow: '0 12px 40px color-mix(in srgb, #000 35%, transparent)',
+          display: 'flex', flexDirection: 'column', maxHeight: '88vh',
+        },
+      },
+      h('div', {
+        style: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: '12px', padding: '12px 16px',
+          borderBottom: '1px solid var(--dsw-alias-border-l1)',
+        },
+      },
+      h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--dsw-alias-label-primary)' } }, title),
+      h('button', {
+        style: { ...S.btn, padding: '2px 9px' },
+        type: 'button',
+        onClick: onClose,
+        'aria-label': t('close'),
+      }, '✕')),
+      h('div', { style: { padding: '14px 16px', overflow: 'auto' } }, children)))
+    }
+
+    // ==================== 作用域授权面板（工作区 / 会话 / 全局通用） ====================
+
+    /**
+     * 一个作用域的面板：列出该层自己的目录与程序，并提供增删。
+     *
+     * 三个入口（设置页 / 工作区导航栏 / 会话顶部）复用同一个组件，
+     * 只是 `scope` 与 `scopeKey` 不同、可见的层不同。
+     */
+    function ScopePanel({ scope, scopeKey, title, subtitle, t, compact }) {
+      const [info, setInfo] = React.useState(null)
+      const [slice, setSlice] = React.useState({ allowedDirs: [], programs: [] })
+      const [grants, setGrants] = React.useState([])
+      const [busy, setBusy] = React.useState(null)
+      const [notice, setNotice] = React.useState(null)
+      // 弹框状态：null | { kind: 'dir' } | { kind: 'program' }
+      const [dialog, setDialog] = React.useState(null)
+
+      const load = React.useCallback(async () => {
+        try {
+          const query = `?scope=${encodeURIComponent(scope)}&key=${encodeURIComponent(scopeKey ?? '')}`
+          const res = await jsonFetch(`/scope${query}`)
+          if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
+          setInfo(res.body.info)
+          setSlice({
+            allowedDirs: res.body.slice?.allowedDirs ?? [],
+            programs: res.body.slice?.programs ?? [],
+          })
+          const g = await jsonFetch('/grants?limit=40')
+          if (g.ok) setGrants(g.body.grants ?? [])
+        } catch (err) {
+          setNotice({ tone: 'error', text: err instanceof Error ? err.message : String(err) })
+        }
+      }, [scope, scopeKey])
+
+      React.useEffect(() => { load() }, [load])
+
+      const save = async (nextSlice, okText) => {
+        setBusy('save')
+        setNotice(null)
+        try {
+          const res = await post('/scope', {
+            scope, key: scopeKey ?? '', slice: nextSlice,
+          })
+          if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
+          setInfo(res.body.info)
+          setSlice(nextSlice)
+          setNotice({ tone: 'success', text: okText ?? t('savedTip') })
+          await load()
+          return true
+        } catch (err) {
+          setNotice({ tone: 'error', text: err instanceof Error ? err.message : String(err) })
+          return false
+        } finally {
+          setBusy(null)
+        }
+      }
+
+      const addDir = (dir) => save(
+        { ...slice, allowedDirs: [...(slice.allowedDirs ?? []), dir] },
+        t('dirAdded'),
+      )
+
+      const removeDir = (dir) => save(
+        { ...slice, allowedDirs: (slice.allowedDirs ?? []).filter((d) => d !== dir) },
+        t('dirRemoved'),
+      )
+
+      const addProgram = (entry) => save(
+        { ...slice, programs: [...(slice.programs ?? []), entry] },
+        t('programAdded'),
+      )
+
+      const removeProgram = (id) => save(
+        { ...slice, programs: (slice.programs ?? []).filter((p) => p.id !== id) },
+        t('programRemoved'),
+      )
+
+      const dirs = slice.allowedDirs ?? []
+      const progs = slice.programs ?? []
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+        // 顶部：标题 + 两个添加按钮（★★ 修问题 4：按钮与表单都在顶部，且表单是弹框）
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 } },
+            h('div', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--dsw-alias-label-primary)' } }, title),
+            subtitle ? h('div', { style: S.tiny }, subtitle) : null,
+            scopeKey ? h('div', { style: { ...S.pathLine, marginTop: '2px' } }, scopeKey) : null),
+          h('div', { style: S.actions },
+            h('button', {
+              style: S.btnPrimary, type: 'button',
+              disabled: Boolean(busy),
+              onClick: () => setDialog({ kind: 'dir' }),
+            }, t('addDir')),
+            h('button', {
+              style: S.btn, type: 'button',
+              disabled: Boolean(busy),
+              onClick: () => setDialog({ kind: 'program' }),
+            }, t('addProgram')))),
+
+        notice ? h('div', { style: noticeTone(notice.tone) }, notice.text) : null,
+
+        // 生效范围概览（三层并集）
+        info
+          ? h('div', { style: { ...S.tiny, padding: '6px 8px', borderRadius: '6px', background: 'var(--dsw-alias-bg-layer-1)' } },
+            `${t('effectiveScope')}：${info.counts.effectiveDirs} ${t('dirsUnit')} / ${info.counts.effectivePrograms} ${t('programsUnit')}`)
+          : null,
+
+        // 目录列表
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          h('div', { style: S.label }, `${t('sec_dirs')}（${dirs.length}）`),
+          dirs.length === 0
+            ? h('div', { style: S.tiny }, t('noDirs'))
+            : dirs.map((dir) => h('div', { key: dir, style: S.rowInline },
+              h('div', { style: { ...S.pathLine, flex: '1 1 200px', minWidth: 0 } }, dir),
+              h('button', {
+                style: { ...S.btnDanger, padding: '2px 8px' }, type: 'button',
+                disabled: Boolean(busy),
+                onClick: () => removeDir(dir),
+              }, t('removeDir'))))),
+
+        // 程序列表
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          h('div', { style: S.label }, `${t('sec_programs')}（${progs.length}）`),
+          progs.length === 0
+            ? h('div', { style: S.tiny }, t('noPrograms'))
+            : progs.map((p) => h('div', { key: p.id, style: S.rowInline },
+              h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
+                h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, p.name || p.id),
+                h('div', { style: S.pathLine }, p.launch?.exe ?? '')),
+              h('button', {
+                style: { ...S.btnDanger, padding: '2px 8px' }, type: 'button',
+                disabled: Boolean(busy),
+                onClick: () => removeProgram(p.id),
+              }, t('removeDir'))))),
+
+        // 授权记录
+        h('details', { style: S.details },
+          h('summary', { style: S.summary }, `${t('sec_grants')}（${grants.length}）`),
+          grants.length === 0
+            ? h('div', { style: { ...S.tiny, marginTop: '6px' } }, t('noGrants'))
+            : h('div', { style: { marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px' } },
+              grants.map((g, i) => h('div', {
+                key: `${g.at}-${i}`,
+                style: { ...S.tiny, display: 'flex', gap: '8px', flexWrap: 'wrap' },
+              },
+              h('span', { style: { opacity: 0.7 } }, formatTime(g.at)),
+              h('span', { style: { fontWeight: 600 } }, scopeLabel(g.scope, t)),
+              h('span', null, g.action),
+              h('span', { style: { opacity: 0.8, overflowWrap: 'anywhere' } }, g.target))))),
+
+        // 弹框
+        dialog?.kind === 'dir'
+          ? h(Modal, { title: t('addDir'), onClose: () => setDialog(null), t },
+            h(DirDialog, {
+              existing: dirs,
+              t,
+              onCancel: () => setDialog(null),
+              onConfirm: async (dir) => {
+                const ok = await addDir(dir)
+                if (ok) setDialog(null)
+              },
+            }))
+          : null,
+        dialog?.kind === 'program'
+          ? h(Modal, { title: t('addProgram'), width: '720px', onClose: () => setDialog(null), t },
+            h(ProgramDialog, {
+              existing: progs,
+              t,
+              onCancel: () => setDialog(null),
+              onConfirm: async (entry) => {
+                const ok = await addProgram(entry)
+                if (ok) setDialog(null)
+              },
+            }))
+          : null)
+    }
+
+    function scopeLabel(scope, t) {
+      if (scope === 'workspace') return t('scopeWorkspace')
+      if (scope === 'session') return t('scopeSession')
+      return t('scopeGlobal')
+    }
+
+    function formatTime(ms) {
+      try {
+        const d = new Date(Number(ms))
+        const pad = (n) => String(n).padStart(2, '0')
+        return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+      } catch {
+        return '—'
+      }
+    }
+
+    /** 加目录弹框：输入框 + 校验（绝对路径、去重）。 */
+    function DirDialog({ existing, t, onCancel, onConfirm }) {
+      const [value, setValue] = React.useState('')
+      const [err, setErr] = React.useState(null)
+      const submit = () => {
+        const dir = value.trim()
+        if (dir === '') { setErr(t('needDirPath')); return }
+        if (!/^[a-zA-Z]:[\\/]/.test(dir) && !dir.startsWith('\\\\') && !dir.startsWith('/')) {
+          setErr(t('needAbsolute')); return
+        }
+        if (existing.some((d) => d.toLowerCase() === dir.toLowerCase())) {
+          setErr(t('dirExists')); return
+        }
+        onConfirm(dir)
+      }
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+        h(Field, { label: t('f_dirPath'), hint: t('f_dirPathTip') },
+          h(TextInput, { value, onChange: (v) => { setValue(v); setErr(null) }, placeholder: 'D:\\models' })),
+        err ? h('div', { style: noticeTone('error') }, err) : null,
+        h('div', { style: S.actions },
+          h('button', { style: S.btnPrimary, type: 'button', onClick: submit }, t('save')),
+          h('button', { style: S.btn, type: 'button', onClick: onCancel }, t('cancel'))))
+    }
+
+    /**
+     * 加程序弹框：复用主表单的字段，但简化——作用域面板加的是"临时/局部"条目，
+     * 不需要全部高级项。
+     */
+    function ProgramDialog({ existing, t, onCancel, onConfirm }) {
+      const [form, setForm] = React.useState({
+        name: '', id: '', exe: '', args: '', cwd: '', description: '',
+      })
+      const [err, setErr] = React.useState(null)
+      const set = (patch) => setForm((prev) => ({ ...prev, ...patch }))
+
+      const submit = () => {
+        const name = form.name.trim()
+        const exe = form.exe.trim()
+        if (name === '') { setErr(t('needName')); return }
+        if (exe === '') { setErr(t('needExe')); return }
+        if (!/^[a-zA-Z]:[\\/]/.test(exe) && !exe.startsWith('\\\\') && !exe.startsWith('/')) {
+          setErr(t('needAbsolute')); return
+        }
+        const id = form.id.trim() || name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || `program-${existing.length + 1}`
+        if (existing.some((p) => p.id === id)) { setErr(t('idExists')); return }
+        onConfirm({
+          id,
+          name,
+          enabled: true,
+          description: form.description.trim(),
+          launch: {
+            exe,
+            args: form.args.trim(),
+            cwd: form.cwd.trim(),
+            env: {},
+          },
+          ready: { url: '', timeoutMs: 180000 },
+        })
+      }
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+        h(Field, { label: t('f_name') },
+          h(TextInput, { value: form.name, onChange: (v) => { set({ name: v }); setErr(null) }, placeholder: 'MyTool' })),
+        h(Field, { label: t('f_id'), hint: t('f_idTip') },
+          h(TextInput, { value: form.id, onChange: (v) => { set({ id: v }); setErr(null) }, placeholder: '(留空自动生成)' })),
+        h(Field, { label: t('f_exe'), hint: t('f_exeTip') },
+          h(TextInput, { value: form.exe, onChange: (v) => { set({ exe: v }); setErr(null) }, placeholder: 'C:\\...\\app.exe' })),
+        h(Field, { label: t('f_args'), hint: t('f_argsTip') },
+          h(TextInput, { value: form.args, onChange: (v) => set({ args: v }), placeholder: '--port 8188' })),
+        h(Field, { label: t('f_cwd'), hint: t('f_cwdTip') },
+          h(TextInput, { value: form.cwd, onChange: (v) => set({ cwd: v }), placeholder: '(留空 = exe 目录)' })),
+        h(Field, { label: t('f_desc'), hint: t('f_descTip') },
+          h(TextArea, { value: form.description, onChange: (v) => set({ description: v }), rows: 2 })),
+        err ? h('div', { style: noticeTone('error') }, err) : null,
+        h('div', { style: S.actions },
+          h('button', { style: S.btnPrimary, type: 'button', onClick: submit }, t('save')),
+          h('button', { style: S.btn, type: 'button', onClick: onCancel }, t('cancel'))))
+    }
+
+    // ==================== 设置页主面板 ====================
+
     function LauncherSection({ t }) {
       const { data, error, refresh } = useStatus()
       const { config, refresh: refreshConfig } = useConfig()
@@ -1024,9 +1420,86 @@ window.__ModuleLoader__.load({
       return h('div', { style: S.wrap },
         header,
         h(SystemCard, { system: data.system, t }),
-        list)
+        list,
+        // 全局作用域的授权目录（原有 AllowedDirsCard 保留在更下方）
+        h('div', { style: S.card },
+          h(ScopePanel, {
+            scope: 'global',
+            scopeKey: '',
+            title: t('scopeGlobal'),
+            subtitle: t('globalScopeTip'),
+            t,
+          })))
     }
 
+
+    // ==================== 作用域入口按钮 ====================
+
+    /** 会话顶部入口：点了弹出「本会话」作用域面板。 */
+    function SessionScopeButton({ t, sessionId }) {
+      const [open, setOpen] = React.useState(false)
+      return h(React.Fragment, null,
+        h('button', {
+          style: { ...S.btn, padding: '2px 8px', fontSize: '11.5px' },
+          type: 'button',
+          title: t('sessionScopeTip'),
+          onClick: () => setOpen(true),
+        }, `📦 ${t('navSession')}`),
+        open
+          ? h(Modal, { title: t('navSession'), width: '680px', onClose: () => setOpen(false), t },
+            h(ScopePanel, {
+              scope: 'session',
+              scopeKey: String(sessionId ?? ''),
+              title: t('navSession'),
+              subtitle: t('sessionScopeTip'),
+              t,
+            }))
+          : null)
+    }
+
+    /**
+     * 工作区导航栏入口：弹出「工作区」作用域面板。
+     *
+     * 作用域 key 用**工作区目录路径**（不是 workspaceId）：工作区记录可以删掉重建，
+     * 路径才是稳定的，否则重建后授权就丢了。
+     */
+    function WorkspaceScopeButton({ t, useWorkspaces }) {
+      const [open, setOpen] = React.useState(false)
+      // useWorkspaces 是宿主注入的 selector hook；拿不到时退化为不可用
+      let workspacePath = ''
+      let workspaceTitle = ''
+      try {
+        const snapshot = typeof useWorkspaces === 'function' ? useWorkspaces((s) => s) : null
+        const list = snapshot?.workspaces ?? snapshot?.items ?? []
+        const current = snapshot?.current ?? snapshot?.selected ?? list[0]
+        if (current) {
+          workspacePath = String(current.path ?? current.directory ?? '')
+          workspaceTitle = String(current.title ?? '')
+        }
+      } catch {
+        workspacePath = ''
+      }
+
+      const disabled = workspacePath === ''
+      return h(React.Fragment, null,
+        h('button', {
+          style: { ...S.btn, padding: '2px 8px', fontSize: '11.5px', ...(disabled ? S.btnOff : {}) },
+          type: 'button',
+          disabled,
+          title: disabled ? t('workspaceUnavailable') : t('workspaceScopeTip'),
+          onClick: () => { if (!disabled) setOpen(true) },
+        }, `🗂 ${t('navWorkspace')}`),
+        open && !disabled
+          ? h(Modal, { title: t('navWorkspace'), width: '680px', onClose: () => setOpen(false), t },
+            h(ScopePanel, {
+              scope: 'workspace',
+              scopeKey: workspacePath,
+              title: workspaceTitle || t('navWorkspace'),
+              subtitle: t('workspaceScopeTip'),
+              t,
+            }))
+          : null)
+    }
 
     // ==================== 插件接线 ====================
     // 只声明 slot 与 locale 这两个硬依赖。uiWorkspace 用 ctx.get 软读取：
@@ -1050,6 +1523,30 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: () => ({ t }),
       }, () => h(ErrorBoundary, null, h(LauncherSection, { t }))))
+
+      // ==================== 会话顶部入口（只影响当前会话） ====================
+      // 挂在会话标题旁的动作区：能拿到 sessionId，作用域自然是"本会话"。
+      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+        name: 'conversation.session.header.actions',
+        id: `${NS}-session`,
+        order: 120,
+        label: () => t('navSession'),
+        locale: NS,
+        inject: () => ({ t }),
+      }, (props) => h(ErrorBoundary, null,
+        h(SessionScopeButton, { t, sessionId: props?.sessionId }))))
+
+      // ==================== 工作区导航栏入口（影响整个工作区） ====================
+      // 挂在全局面板图标区：从 useWorkspaces 里取当前活动工作区的路径作作用域 key。
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: `${NS}-workspace`,
+        order: 120,
+        label: () => t('navWorkspace'),
+        locale: NS,
+        inject: () => ({ t }),
+      }, (props) => h(ErrorBoundary, null,
+        h(WorkspaceScopeButton, { t, useWorkspaces: props?.useWorkspaces }))))
     }
 
     return { name: NS, inject, apply }
