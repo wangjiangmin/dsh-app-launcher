@@ -11,7 +11,7 @@
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "description": "按需启动本地 AI 软件（ComfyUI / LM Studio / NInfer / 任意软件）：先查 CPU、GPU、内存是否有高负载，空闲才允许拉起；配置一次后 Agent 无需二次授权即可启动。",
+  "description": "本地授权：按 CPU / GPU / 内存空闲情况授权并启动本地 AI 软件与脚本（ComfyUI / LM Studio / NInfer / 任意程序）；配置一次后 Agent 无需二次授权。",
   "engines": {
     "node": ">=22"
   },
@@ -24,10 +24,11 @@
     "README.md"
   ],
   "scripts": {
-    "verify": "node test/verify.mjs && node test/scopes.mjs && node test/workspace-scope.mjs && node test/facade.mjs && node test/render.mjs",
+    "verify": "node test/verify.mjs && node test/scopes.mjs && node test/workspace-scope.mjs && node test/lazy.mjs && node test/facade.mjs && node test/render.mjs",
     "verify:logic": "node test/verify.mjs",
     "verify:scopes": "node test/scopes.mjs",
     "verify:workspace": "node test/workspace-scope.mjs",
+    "verify:lazy": "node test/lazy.mjs",
     "verify:facade": "node test/facade.mjs",
     "verify:render": "node test/render.mjs"
   },

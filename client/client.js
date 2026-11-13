@@ -38,10 +38,15 @@ window.__ModuleLoader__.load({
       globalTipOn: 'Agent 可以直接调用 app_list / app_start；切换后旧会话立刻生效',
       globalTipOff: '已从 Agent 的工具表注销，现有会话也不会再看到',
       sec_system: '当前资源',
+      test: '测试',
+      testing: '检查中…',
+      testTip: '手动检查一次 CPU / GPU / 内存（进入页面时不做检查，避免卡顿）',
+      notCheckedYet: '资源未检查',
+      lazyTip: '进入页面不自动检查，点「测试」或启动程序时才查',
       sec_programs: '应用列表',
       sec_advanced: '高级设置',
       empty: '还没有任何应用，点「添加应用」开始配置',
-      addApp: '添加应用',
+      addApp: '授权',
       edit: '编辑',
       del: '删除',
       save: '保存',
@@ -203,10 +208,15 @@ window.__ModuleLoader__.load({
       globalTipOn: 'The Agent can call app_list / app_start; existing sessions pick this up immediately',
       globalTipOff: 'Removed from the Agent tool table; existing sessions will not see it',
       sec_system: 'Current load',
+      test: 'Test',
+      testing: 'Checking…',
+      testTip: 'Run a one-off CPU / GPU / RAM check (opening this page does not sample, to stay fast)',
+      notCheckedYet: 'Resources not checked',
+      lazyTip: 'Not checked on open — hit Test, or start an app',
       sec_programs: 'Applications',
       sec_advanced: 'Advanced',
       empty: 'No applications yet — click "Add application"',
-      addApp: 'Add application',
+      addApp: 'Authorize',
       edit: 'Edit',
       del: 'Delete',
       save: 'Save',
@@ -495,12 +505,23 @@ window.__ModuleLoader__.load({
     /** GET，返回解包后的 body（与 run()/post() 的用法保持一致）。 */
     const get = (path) => jsonFetch(path, { method: 'GET' })
 
-    function useStatus() {
+    /**
+     * 状态数据。
+     *
+     * ★ 懒加载：首屏只取 `?lazy=1`（不采样、不探针，秒开）。
+     * 只有用户点「测试」或启动某个程序之后，才切到完整模式并按 POLL_MS 轮询 ——
+     * 之前一进设置页就 full 采样 + 每 3 秒轮询，等于持续跑 nvidia-smi，很卡。
+     *
+     * @param {boolean} live 是否进入完整模式（已测试过 / 有程序在启动或运行）
+     */
+    function useStatus(live) {
       const [data, setData] = React.useState(null)
       const [error, setError] = React.useState(null)
-      const refresh = React.useCallback(async () => {
+      const [checking, setChecking] = React.useState(false)
+
+      const fetchOnce = React.useCallback(async (full) => {
         try {
-          const res = await jsonFetch('/status')
+          const res = await jsonFetch(full ? '/status?fresh=1' : '/status?lazy=1')
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           setData(res.body)
           setError(null)
@@ -508,12 +529,37 @@ window.__ModuleLoader__.load({
           setError(err instanceof Error ? err.message : String(err))
         }
       }, [])
+
+      const refresh = React.useCallback(async () => {
+        await fetchOnce(Boolean(live))
+      }, [fetchOnce, live])
+
+      /** 手动「测试」：强制一次完整采样。 */
+      const probe = React.useCallback(async () => {
+        setChecking(true)
+        try {
+          await fetchOnce(true)
+        } finally {
+          setChecking(false)
+        }
+      }, [fetchOnce])
+
       React.useEffect(() => {
         refresh()
-        const timer = setInterval(refresh, POLL_MS)
-        return () => clearInterval(timer)
       }, [refresh])
-      return { data, error, refresh }
+
+      // 轮询策略：只在"有程序正在启动或在运行"时轮询（那时需要看进度/状态变化）。
+      // 单纯点过一次「测试」不该导致后台每 3 秒跑一次 nvidia-smi —— 那是持续开销。
+      const needPoll = Boolean(
+        live && data?.programs?.some((p) => p.starting || p.phase === 'starting' || p.phase === 'ready'),
+      )
+      React.useEffect(() => {
+        if (!needPoll) return undefined
+        const timer = setInterval(() => { fetchOnce(true) }, POLL_MS)
+        return () => clearInterval(timer)
+      }, [needPoll, fetchOnce])
+
+      return { data, error, refresh, probe, checking }
     }
 
     function useConfig() {
@@ -898,19 +944,32 @@ window.__ModuleLoader__.load({
 
 
     // ==================== 资源条 ====================
-    function SystemCard({ system, t }) {
+    /**
+     * 资源卡。
+     *
+     * 懒加载：未测试时 `system.lazy` 为 true、各项为 null，显示「未检查」，
+     * 不显示假的 0%；用户点「测试」后才做完整采样。
+     */
+    function SystemCard({ system, t, onProbe, checking }) {
+      const unchecked = system?.lazy === true
       const gpu = system?.gpu ?? {}
       const mem = system?.memory ?? {}
       const cpu = system?.cpu ?? {}
       const holders = system?.gpuHolders ?? []
 
-      const pills = [
-        h(Pill, { key: 'gpu', tone: !gpu.available ? 'muted' : gpu.utilPct >= 50 ? 'warn' : 'success' },
-          `${t('f_gpu')}: ${gpu.available ? `${gpu.name ?? 'GPU'} · ${gpu.utilPct}% · ${formatMiB(gpu.freeMiB)} free` : (gpu.reason ?? '—')}`),
-        h(Pill, { key: 'cpu', tone: cpu.pct >= 80 ? 'warn' : 'success' }, `${t('f_cpu')}: ${cpu.pct ?? '—'}%`),
-        h(Pill, { key: 'mem', tone: (mem.freeMiB && mem.totalMiB && mem.freeMiB / mem.totalMiB < 0.15) ? 'warn' : 'success' },
-          `${t('f_mem')}: ${formatMiB(mem.freeMiB)} / ${formatMiB(mem.totalMiB)}`),
-      ]
+      const pills = unchecked
+        ? [h(Pill, { key: 'unchecked', tone: 'muted' }, t('notCheckedYet'))]
+        : [
+          h(Pill, {
+            key: 'gpu',
+            tone: !gpu.available ? 'muted' : gpu.utilPct >= 50 ? 'warn' : 'success',
+          }, `${t('f_gpu')}: ${gpu.available ? `${gpu.name ?? 'GPU'} · ${gpu.utilPct}% · ${formatMiB(gpu.freeMiB)} free` : (gpu.reason ?? '—')}`),
+          h(Pill, { key: 'cpu', tone: cpu.pct >= 80 ? 'warn' : 'success' }, `${t('f_cpu')}: ${cpu.pct ?? '—'}%`),
+          h(Pill, {
+            key: 'mem',
+            tone: (mem.freeMiB && mem.totalMiB && mem.freeMiB / mem.totalMiB < 0.15) ? 'warn' : 'success',
+          }, `${t('f_mem')}: ${formatMiB(mem.freeMiB)} / ${formatMiB(mem.totalMiB)}`),
+        ]
 
       let holdersBlock = null
       if (holders.length > 0) {
@@ -924,7 +983,16 @@ window.__ModuleLoader__.load({
       return h('div', { style: S.card },
         h('div', { style: S.cardHead },
           t('sec_system'),
-          h('span', { style: S.tiny }, formatClock(system?.at) ?? '')),
+          h('div', { style: S.actions },
+            unchecked ? h('span', { style: S.tiny }, t('lazyTip')) : null,
+            h('span', { style: S.tiny }, formatClock(system?.at) ?? ''),
+            h('button', {
+              style: { ...S.btn, padding: '2px 10px', ...(checking ? S.btnOff : {}) },
+              type: 'button',
+              disabled: checking,
+              title: t('testTip'),
+              onClick: onProbe,
+            }, checking ? t('testing') : t('test')))),
         h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, pills),
         holdersBlock)
     }
@@ -1273,7 +1341,9 @@ window.__ModuleLoader__.load({
     // ==================== 设置页主面板 ====================
 
     function LauncherSection({ t }) {
-      const { data, error, refresh } = useStatus()
+      // live=false 时只取懒快照（秒开）；点「测试」或有程序在跑才切完整模式
+      const [live, setLive] = React.useState(false)
+      const { data, error, refresh, probe, checking } = useStatus(live)
       const { config, refresh: refreshConfig } = useConfig()
       const [busy, setBusy] = React.useState(null)
       const [confirmStop, setConfirmStop] = React.useState(null)
@@ -1390,6 +1460,8 @@ window.__ModuleLoader__.load({
             onEdit: (next) => setEditing(next),
             onDelete: deleteProgram,
             onStart: async (id) => {
+              // 启动后需要看进度与状态，切到完整模式（含轮询）
+              setLive(true)
               setBusy(`${id}:start`)
               await run(() => post('/start', { id }), t('startedTip'))
               setBusy(null)
@@ -1409,35 +1481,43 @@ window.__ModuleLoader__.load({
               }
             },
             verifyResult: verifyResults[program.id],
-          }),
-          editing === program.id
-            ? h(ErrorBoundary, { key: `form-${program.id}` },
-              h(ProgramForm, {
-                initial: toForm(program),
-                isNew: false,
-                busy: busy === 'form',
-                notice: formNotice,
-                t,
-                onCancel: () => setEditing(null),
-                onSave: (entry) => saveEdit(program.id, entry),
-              }))
-            : null)),
-        editing === 'new'
-          ? h(ErrorBoundary, { key: 'form-new' },
-            h(ProgramForm, {
-              initial: null,
-              isNew: true,
-              busy: busy === 'form',
-              notice: formNotice,
-              t,
-              onCancel: () => setEditing(null),
-              onSave: saveNew,
-            }))
-          : null)
+          }))))
+      // 编辑 / 新建表单统一用弹框（不再在列表里内联展开）：
+      // 列表可能很长，内联表单会被挤到看不见的位置。
+      const formDialog = editing === null
+        ? null
+        : h(Modal, {
+          title: editing === 'new' ? t('addApp') : t('edit'),
+          width: '720px',
+          onClose: () => setEditing(null),
+          t,
+        },
+        h(ErrorBoundary, { key: `form-${editing}` },
+          h(ProgramForm, {
+            initial: editing === 'new' ? null : toForm(data.programs.find((p) => p.id === editing) ?? {}),
+            isNew: editing === 'new',
+            busy: busy === 'form',
+            notice: formNotice,
+            t,
+            onCancel: () => setEditing(null),
+            onSave: editing === 'new'
+              ? saveNew
+              : (entry) => saveEdit(editing, entry),
+          })))
 
       return h('div', { style: S.wrap },
         header,
-        h(SystemCard, { system: data.system, t }),
+        formDialog,
+        h(SystemCard, {
+          system: data.system,
+          t,
+          checking,
+          // 点「测试」：先切到完整模式（这样后续会轮询），再强制取样
+          onProbe: async () => {
+            setLive(true)
+            await probe()
+          },
+        }),
         list,
         // 全局作用域的授权目录（原有 AllowedDirsCard 保留在更下方）
         h('div', { style: S.card },
