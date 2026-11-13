@@ -58,10 +58,21 @@ const locale = {
   addLanguage() { return () => {} },
 }
 
+/** 记录每一次 slot 注册：{ slot, options }。用于断言入口确实注册了。 */
+const registrations = []
+
 const ctx = {
   effect(cb) { const r = cb(); return typeof r === 'function' ? r : () => {} },
-  get(name) { return name === 'uiWorkspace' ? {} : undefined },
-  slots: { inject(k, cb) { const e = cb(); return typeof e === 'function' ? e : () => {} }, register() { return () => {} } },
+  get(name) {
+    if (name === 'uiWorkspace') return {}
+    // layout：本插件用 selectPanel 切到自己的面板
+    if (name === 'layout') return { selectPanel() {} }
+    return undefined
+  },
+  slots: {
+    inject(k, cb) { const e = cb(); return typeof e === 'function' ? e : () => {} },
+    register(options) { registrations.push(options); return () => {} },
+  },
   locale,
 }
 
@@ -176,6 +187,25 @@ tree = exports.AppCard({
 })
 renderNode(tree)
 console.log('用例3 程序卡片（含验证结果）：ok（组件 ' + seen.size + ' 种）')
+
+// ---------- 用例4：入口注册（防止"注册了但没生效"） ----------
+const slotNames = registrations.map((r) => r.name)
+const mustHave = ['settings.section', 'sidebar.panellist', 'main', 'conversation.session.header.actions']
+const missing = mustHave.filter((n) => !slotNames.includes(n))
+if (missing.length > 0) {
+  problems.push(`缺少 slot 注册: ${missing.join(', ')}（已注册: ${slotNames.join(', ')}）`)
+} else {
+  console.log('用例4 入口注册：ok（' + slotNames.join(', ') + '）')
+}
+
+// main 面板的 key 必须与 panellist 的 id 一致，否则点图标打不开
+const panellist = registrations.find((r) => r.name === 'sidebar.panellist')
+const mainReg = registrations.find((r) => r.name === 'main')
+if (panellist && mainReg && panellist.id !== mainReg.key) {
+  problems.push(`main key (${mainReg.key}) 与 panellist id (${panellist.id}) 不一致，点图标打不开面板`)
+} else if (panellist && mainReg) {
+  console.log('用例5 key 配对：ok（' + panellist.id + '）')
+}
 
 if (problems.length > 0) {
   console.log('\n✗ 发现渲染错误:')

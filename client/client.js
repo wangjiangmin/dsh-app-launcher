@@ -1596,6 +1596,50 @@ window.__ModuleLoader__.load({
           : null)
     }
 
+    /** 由 apply() 注入的服务读取器（组件是模块级函数，拿不到 ctx）。 */
+    let ctxGetService = () => undefined
+    const ctxGet = (name) => ctxGetService(name)
+
+    // ==================== 插件栏入口与主面板 ====================
+
+    /**
+     * 侧边栏插件栏的图标（与「插件」「自动化任务」「上下文洞察」并列）。
+     * wide=false 时侧边栏是收起状态，只显示图标。
+     */
+    function PanelLauncherIcon({ t, wide }) {
+      return h('button', {
+        type: 'button',
+        style: {
+          display: 'flex', alignItems: 'center', gap: '8px',
+          width: '100%', boxSizing: 'border-box',
+          padding: wide ? '6px 10px' : '6px',
+          justifyContent: wide ? 'flex-start' : 'center',
+          font: 'inherit', fontSize: '12px', cursor: 'pointer',
+          border: 'none', borderRadius: '6px', background: 'transparent',
+          color: 'var(--dsw-alias-label-secondary)',
+        },
+        title: t('nav'),
+        onClick: () => {
+          // 用 layout 服务切到我们注册的 main key
+          const layout = ctxGet('layout')
+          if (layout?.selectPanel) layout.selectPanel(NS)
+        },
+      },
+      h('span', { style: { fontSize: '15px', lineHeight: 1 } }, '🔐'),
+      wide ? h('span', null, t('nav')) : null)
+    }
+
+    /**
+     * 主面板：点插件栏图标后在中栏渲染。
+     *
+     * 内容与设置页的「本地授权」一致（同一份数据），
+     * 但这里是**常驻入口**，不必先打开设置。
+     */
+    function LauncherPanel({ t }) {
+      return h('div', { style: { padding: '16px', overflow: 'auto', height: '100%', boxSizing: 'border-box' } },
+        h(ErrorBoundary, null, h(LauncherSection, { t })))
+    }
+
     // ==================== 插件接线 ====================
     // 只声明 slot 与 locale 这两个硬依赖。uiWorkspace 用 ctx.get 软读取：
     // 它是内置浏览器的数据源，但缺了它整套设置页仍应正常工作（浏览器降级为手填）。
@@ -1605,6 +1649,9 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), `${NS}: dictionaries`)
       const t = ctx.locale.bind(NS)
+
+      // 给模块级组件一个读服务的能力（layout.selectPanel 用于切到本插件的面板）
+      ctxGetService = (name) => (typeof ctx.get === 'function' ? ctx.get(name) : undefined)
 
       // 文件浏览走插件自己的 /browse（宿主侧实现，受 allowedDirs 白名单限制），
       // 不依赖宿主 uiWorkspace 的 listDirectory —— 本机只装配了 native 能力，
@@ -1618,6 +1665,27 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: () => ({ t }),
       }, () => h(ErrorBoundary, null, h(LauncherSection, { t }))))
+
+      // ==================== 主页插件栏入口（与「插件」「自动化任务」「上下文洞察」并列） ====================
+      // DSH 没有开放「工作区标题菜单」的 slot，所以改放在最常用的位置：
+      // 侧边栏插件栏的图标 + （配对）主面板。
+      // 配对规则：sidebar.panellist 注册的 id 决定 key，main 按同一 key 渲染面板。
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: NS,
+        order: 120,
+        label: () => t('nav'),
+        locale: NS,
+        inject: () => ({ t }),
+      }, (props) => h(ErrorBoundary, null,
+        h(PanelLauncherIcon, { t, wide: props?.wide }))))
+
+      // 对应的主面板：点侧边栏图标后在中栏渲染
+      ctx.slots.inject('main', () => ctx.slots.register({
+        name: 'main',
+        key: NS,
+        locale: NS,
+      }, () => h(ErrorBoundary, null, h(LauncherPanel, { t }))))
 
       // ==================== 会话顶部入口（只影响当前会话） ====================
       // 挂在会话标题旁的动作区：能拿到 sessionId，作用域自然是"本会话"。
