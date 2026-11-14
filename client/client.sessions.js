@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     function build({ React, h, core, controls, hooks }) {
       const { S, TONES, noticeTone, post, jsonFetch, formatTime, scopeLabel } = core
       const { TextInput, Switch } = controls
-      const { useSessions } = hooks
+      const { useSessions, useWorkspaces } = hooks
 
     /**
      * 会话多选选择器：搜索 + 勾选列表。
@@ -60,9 +60,62 @@ window.__ModuleLoader__.load({
                 })))
     }
 
-    /** 单条目会话授权弹框：只改 sessions，走 /config/entry-sessions 快速通道。 */
+    /**
+     * 工作区多选选择器：搜索 + 勾选列表。按工作区路径勾选。
+     * 授权一个工作区＝它名下的所有会话（含之后新增的）默认可用该条目。
+     * 已选但不在列表里的路径（工作区已删除）单独列出，仍可移除。
+     */
+    function WorkspacePicker({ selected, onChange, t }) {
+      const { workspaces, loading, error } = useWorkspaces()
+      const [query, setQuery] = React.useState('')
+      const sel = selected ?? []
+      const toggle = (path) => onChange(sel.includes(path) ? sel.filter((x) => x !== path) : [...sel, path])
+      const q = query.trim().toLowerCase()
+      const shown = q === '' ? workspaces : workspaces.filter((w) => `${w.title ?? ''} ${w.path}`.toLowerCase().includes(q))
+      const missing = sel.filter((path) => !workspaces.some((w) => w.path === path))
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+        h(TextInput, { value: query, onChange: setQuery, placeholder: t('searchWorkspaces') }),
+        missing.length > 0
+          ? h('div', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+            missing.map((path) => h('span', { key: path, style: { ...S.pill, color: TONES.muted.color, background: TONES.muted.bg, borderColor: TONES.muted.color } },
+              h('span', { style: { overflowWrap: 'anywhere', maxWidth: '220px' } }, path),
+              h('button', {
+                type: 'button',
+                style: { border: 'none', background: 'transparent', cursor: 'pointer', color: 'inherit', font: 'inherit', padding: 0 },
+                onClick: () => toggle(path),
+              }, '✕'))))
+          : null,
+        loading
+          ? h('div', { style: S.tiny }, t('workspacesLoading'))
+          : error
+            ? h('div', { style: S.tinyWarn }, `${t('workspacesFail')}: ${error}`)
+            : shown.length === 0
+              ? h('div', { style: S.tiny }, t('workspacesEmpty'))
+              : h('div', { style: { ...S.browseList, maxHeight: '200px' } },
+                shown.map((w) => {
+                  const checked = sel.includes(w.path)
+                  return h('label', {
+                    key: w.path,
+                    style: {
+                      display: 'flex', gap: '8px', alignItems: 'flex-start',
+                      padding: '4px 6px', cursor: 'pointer', borderRadius: '4px',
+                      background: checked ? 'color-mix(in srgb, var(--dsw-alias-brand-primary, var(--color-blue-500)) 10%, transparent)' : 'transparent',
+                    },
+                  },
+                  h('input', { type: 'checkbox', checked, onChange: () => toggle(w.path), style: { marginTop: '3px' } }),
+                  h('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 } },
+                    h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', overflowWrap: 'anywhere' } },
+                      w.title || w.path,
+                      h('span', { style: { ...S.tiny, marginLeft: '6px' } }, t('workspaceSessionCount').replace('{n}', w.sessionCount ?? 0))),
+                    h('div', { style: { ...S.pathLine, fontSize: '10.5px' } }, w.path)))
+                })))
+    }
+
+    /** 单条目授权弹框：会话 + 工作区两段，走 /config/entry-grants 一次保存。 */
     function SessionAuthDialog({ entry, t, onClose, onSaved }) {
       const [selected, setSelected] = React.useState(() => (entry.sessions ?? []).slice())
+      const [selectedWs, setSelectedWs] = React.useState(() => (entry.workspaces ?? []).slice())
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState(null)
 
@@ -70,7 +123,7 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setNotice(null)
         try {
-          const res = await post('/config/entry-sessions', { id: entry.id, sessions: selected })
+          const res = await post('/config/entry-grants', { id: entry.id, sessions: selected, workspaces: selectedWs })
           if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
           if (typeof onSaved === 'function') {
             try { await onSaved() } catch { /* 外层刷新失败不影响保存结果 */ }
@@ -85,7 +138,12 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
         h('div', { style: S.tiny }, t('authTip')),
+        h('div', { style: S.label }, t('authSessions')),
         h(SessionPicker, { selected, onChange: setSelected, t }),
+        h('div', { style: S.divider }),
+        h('div', { style: S.label }, t('authWorkspaces')),
+        h('div', { style: S.tiny }, t('authWorkspacesTip')),
+        h(WorkspacePicker, { selected: selectedWs, onChange: setSelectedWs, t }),
         notice ? h('div', { style: noticeTone('error') }, notice) : null,
         h('div', { style: S.actions },
           h('button', {
@@ -150,7 +208,11 @@ window.__ModuleLoader__.load({
               entries.map((entry) => h('div', { key: entry.id, style: S.rowInline },
                 h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
                   h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', overflowWrap: 'anywhere' } },
-                    `${entry.name || entry.id} · ${t(kindKey(entry))}`),
+                    `${entry.name || entry.id} · ${t(kindKey(entry))}`,
+                    (entry.workspaces ?? []).length > 0
+                      ? h('span', { style: { ...S.tiny, marginLeft: '6px', color: TONES.brand.color }, title: (entry.workspaces ?? []).join('\n') },
+                        t('workspacesCount').replace('{n}', entry.workspaces.length))
+                      : null),
                   h('div', { style: S.pathLine }, entry.kind === 'directory' ? (entry.path ?? '') : (entry.launch?.exe ?? ''))),
                 busy === entry.id
                   ? h('span', { style: S.tiny }, '…')
@@ -188,7 +250,7 @@ window.__ModuleLoader__.load({
               h('span', { style: { opacity: 0.8, overflowWrap: 'anywhere' } }, g.target)))))
     }
 
-      return { SessionPicker, SessionAuthDialog, SessionGrantPanel, GrantsLog }
+      return { SessionPicker, WorkspacePicker, SessionAuthDialog, SessionGrantPanel, GrantsLog }
     }
     return { build }
   },

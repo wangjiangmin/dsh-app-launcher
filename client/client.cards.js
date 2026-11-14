@@ -30,11 +30,15 @@ window.__ModuleLoader__.load({
       else if (program.enabled && program.valid) {
         pills.push(h(Pill, { key: 'g', tone: gateOk ? 'success' : 'warn', title: gate?.reason ?? '' }, gateOk ? t('gate_ok') : t('gate_block')))
       }
-      // 会话授权概览：0 个会话＝对所有会话不可见，必须醒目提示
+      // 授权概览：会话 + 工作区都为 0＝对所有会话不可见，必须醒目提示
       const sessions = program.sessions ?? []
-      pills.push(sessions.length === 0
-        ? h(Pill, { key: 's', tone: 'warn', title: t('authTip') }, t('sessionsNone'))
-        : h(Pill, { key: 's', tone: 'brand', title: sessions.join('\n') }, t('sessionsCount').replace('{n}', sessions.length)))
+      const workspaces = program.workspaces ?? []
+      if (sessions.length === 0 && workspaces.length === 0) {
+        pills.push(h(Pill, { key: 's', tone: 'warn', title: t('authTip') }, t('sessionsNone')))
+      } else {
+        if (sessions.length > 0) pills.push(h(Pill, { key: 's', tone: 'brand', title: sessions.join('\n') }, t('sessionsCount').replace('{n}', sessions.length)))
+        if (workspaces.length > 0) pills.push(h(Pill, { key: 'w', tone: 'brand', title: workspaces.join('\n') }, t('workspacesCount').replace('{n}', workspaces.length)))
+      }
 
       return h('div', { style: S.appCard },
         h('div', { style: S.appTop },
@@ -101,6 +105,14 @@ window.__ModuleLoader__.load({
     /** 目录条目：没有启动/停止/验证，只有路径 + 会话授权 + 编辑/删除。 */
     function DirectoryCard({ entry, t, editing, onEdit, onDelete, onAuth }) {
       const sessions = entry.sessions ?? []
+      const workspaces = entry.workspaces ?? []
+      const authPills = []
+      if (sessions.length === 0 && workspaces.length === 0) {
+        authPills.push(h(Pill, { key: 's', tone: 'warn', title: t('authTip') }, t('sessionsNone')))
+      } else {
+        if (sessions.length > 0) authPills.push(h(Pill, { key: 's', tone: 'brand', title: sessions.join('\n') }, t('sessionsCount').replace('{n}', sessions.length)))
+        if (workspaces.length > 0) authPills.push(h(Pill, { key: 'w', tone: 'brand', title: workspaces.join('\n') }, t('workspacesCount').replace('{n}', workspaces.length)))
+      }
       return h('div', { style: S.appCard },
         h('div', { style: S.appTop },
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: '1 1 180px' } },
@@ -114,9 +126,7 @@ window.__ModuleLoader__.load({
         h('div', { style: S.pills },
           h(Pill, { tone: 'muted' }, t('kind_directory')),
           entry.enabled === false ? h(Pill, { tone: 'muted' }, t('disabled')) : null,
-          sessions.length === 0
-            ? h(Pill, { tone: 'warn', title: t('authTip') }, t('sessionsNone'))
-            : h(Pill, { tone: 'brand', title: sessions.join('\n') }, t('sessionsCount').replace('{n}', sessions.length))))
+          ...authPills))
     }
 
     // ==================== 资源条 ====================

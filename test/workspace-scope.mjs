@@ -195,6 +195,134 @@ section('listSessions：降级与兜底')
   check('会话列表截断到 300 条', sessions.length === 300, String(sessions.length))
 }
 
+// ---------- 工作区级授权（poolVersion 2 新能力：sessions OR workspaces）----------
+
+section('工作区授权可见性：会话所属工作区命中 workspaces 即可见')
+
+{
+  const dir = tempDir()
+  const entry = {
+    id: 'ws-app', name: 'WsApp', kind: 'program',
+    launch: { exe: 'C:\\w.exe' }, sessions: [], workspaces: ['D:\\proj\\alpha'],
+  }
+  const rt = makeRuntime(dir, { programs: [entry] })
+  rt.setWorkspaceResolver((sid) => {
+    if (sid === 'sess-in-alpha') return { path: 'D:\\proj\\alpha', title: 'Alpha' }
+    if (sid === 'sess-in-beta') return { path: 'D:\\proj\\beta', title: 'Beta' }
+    return null
+  })
+  const idsIn = async (sid) => rt.withAgentScope({ agent: { id: sid } }, async () => rt.visiblePrograms().map((p) => p.id))
+  check('sessions 为空但所属工作区已授权 → 可见', (await idsIn('sess-in-alpha')).includes('ws-app'))
+  check('别的工作区的会话 → 不可见', !(await idsIn('sess-in-beta')).includes('ws-app'))
+  check('解析不到工作区的会话 → 不可见（fail-closed）', !(await idsIn('sess-unknown')).includes('ws-app'))
+  check('空会话 id → 不可见', !(await idsIn('')).includes('ws-app'))
+}
+
+section('工作区路径归一：大小写 / 尾分隔符不影响命中')
+
+{
+  const dir = tempDir()
+  const entry = {
+    id: 'ws-app', name: 'WsApp', kind: 'program',
+    launch: { exe: 'C:\\w.exe' }, sessions: [], workspaces: ['d:\\proj\\alpha\\'],
+  }
+  const rt = makeRuntime(dir, { programs: [entry] })
+  rt.setWorkspaceResolver(() => ({ path: 'D:\\PROJ\\Alpha', title: 'Alpha' }))
+  const visible = await rt.withAgentScope({ agent: { id: 's1' } }, async () => rt.visiblePrograms().map((p) => p.id))
+  check('大小写+尾分隔符不同仍命中（pathKey 归一）', visible.includes('ws-app'), JSON.stringify(visible))
+}
+
+section('工作区授权对目录条目同样生效')
+
+{
+  const dir = tempDir()
+  const dirEntry = {
+    id: 'models', name: '模型目录', kind: 'directory',
+    path: 'D:\\models', sessions: [], workspaces: ['D:\\proj\\alpha'],
+  }
+  const rt = makeRuntime(dir, { programs: [dirEntry] })
+  rt.setWorkspaceResolver((sid) => (sid === 's-alpha' ? { path: 'D:\\proj\\alpha', title: 'A' } : null))
+  const dirsIn = async (sid) => rt.withAgentScope({ agent: { id: sid } }, async () => rt.visibleDirectories().map((d) => d.id))
+  check('工作区下的会话可见已授权目录', (await dirsIn('s-alpha')).includes('models'))
+  check('无工作区的会话不可见目录', !(await dirsIn('s-other')).includes('models'))
+}
+
+section('sessions 与 workspaces 任一命中即可见')
+
+{
+  const dir = tempDir()
+  const entry = {
+    id: 'both', name: 'Both', kind: 'program',
+    launch: { exe: 'C:\\b.exe' }, sessions: ['sess-direct'], workspaces: ['D:\\proj\\alpha'],
+  }
+  const rt = makeRuntime(dir, { programs: [entry] })
+  rt.setWorkspaceResolver((sid) => (sid === 'sess-ws' ? { path: 'D:\\proj\\alpha', title: 'A' } : null))
+  const direct = await rt.withAgentScope({ agent: { id: 'sess-direct' } }, async () => rt.visiblePrograms().map((p) => p.id))
+  const viaWs = await rt.withAgentScope({ agent: { id: 'sess-ws' } }, async () => rt.visiblePrograms().map((p) => p.id))
+  check('sessions 直接命中可见（无需工作区）', direct.includes('both'))
+  check('workspaces 命中可见（无需 sessions）', viaWs.includes('both'))
+}
+
+section('setEntryGrants / setEntryWorkspaces：改授权 + 审计')
+
+{
+  const dir = tempDir()
+  const rt = makeRuntime(dir, { programs: [{ id: 'app', name: 'App', launch: { exe: 'C:\\a.exe' }, sessions: [], workspaces: [] }] })
+  const res = rt.setEntryGrants('app', { sessions: ['s1'], workspaces: ['D:\\proj\\alpha'] })
+  check('setEntryGrants 返回两个维度', JSON.stringify(res.sessions) === JSON.stringify(['s1']) && JSON.stringify(res.workspaces) === JSON.stringify(['D:\\proj\\alpha']))
+  const p = rt.currentConfig().programs.find((x) => x.id === 'app')
+  check('workspaces 落盘', JSON.stringify(p.workspaces) === JSON.stringify(['D:\\proj\\alpha']))
+  check('审计记录工作区授权（kind=workspace add）', rt.grants(20).some((g) => g.kind === 'workspace' && g.action === 'add' && g.target === 'D:\\proj\\alpha'))
+  check('审计记录会话授权（kind=entry add）', rt.grants(20).some((g) => g.kind === 'entry' && g.action === 'add' && g.target === 's1'))
+
+  // 只改工作区，sessions 保持不变
+  rt.setEntryWorkspaces('app', ['D:\\proj\\beta'])
+  const p2 = rt.currentConfig().programs.find((x) => x.id === 'app')
+  check('setEntryWorkspaces 不动 sessions', JSON.stringify(p2.sessions) === JSON.stringify(['s1']))
+  check('setEntryWorkspaces 换工作区', JSON.stringify(p2.workspaces) === JSON.stringify(['D:\\proj\\beta']))
+  check('审计记录移除旧工作区', rt.grants(20).some((g) => g.kind === 'workspace' && g.action === 'remove' && g.target === 'D:\\proj\\alpha'))
+
+  // 落盘再读回
+  const reopened = makeRuntime(dir)
+  const p3 = reopened.currentConfig().programs.find((x) => x.id === 'app')
+  check('重启后工作区授权仍在', JSON.stringify(p3.workspaces) === JSON.stringify(['D:\\proj\\beta']))
+
+  let threw = null
+  try { rt.setEntryGrants('no-such-entry', { workspaces: ['D:\\x'] }) } catch (e) { threw = e }
+  check('未知条目抛错', threw !== null && /找不到条目/.test(threw.message))
+}
+
+section('listWorkspaces：工作区选择器数据源')
+
+{
+  const rt = makeRuntime(tempDir())
+  check('无服务 → none + 空', (() => { const r = rt.listWorkspaces(); return r.source === 'none' && r.workspaces.length === 0 })())
+  rt.setWorkspaceLister(() => [
+    { id: 'ws-1', path: 'D:\\proj\\alpha', title: 'Alpha', sessionIds: ['s1', 's2'] },
+    { id: 'ws-2', path: 'D:\\proj\\beta', title: 'Beta', sessionIds: ['s3'] },
+    { id: 'ws-empty', path: '', title: '空路径', sessionIds: [] },
+  ])
+  const { source, workspaces } = rt.listWorkspaces()
+  check('source=workspaceRegistry', source === 'workspaceRegistry')
+  check('过滤空路径', workspaces.length === 2)
+  check('带会话计数', workspaces[0].sessionCount === 2 && workspaces[1].sessionCount === 1)
+  check('透传 id/path/title', workspaces[0].id === 'ws-1' && workspaces[0].path === 'D:\\proj\\alpha' && workspaces[0].title === 'Alpha')
+  rt.setWorkspaceLister(() => { throw new Error('registry 炸了') })
+  check('lister 抛错 → none 兜底', rt.listWorkspaces().source === 'none')
+}
+
+section('unauthCount：会话与工作区都空才算未授权')
+
+{
+  const dir = tempDir()
+  const rt = makeRuntime(dir, { programs: [
+    { id: 'a', name: 'A', launch: { exe: 'C:\\a.exe' }, sessions: ['s1'], workspaces: [] },
+    { id: 'b', name: 'B', launch: { exe: 'C:\\b.exe' }, sessions: [], workspaces: ['D:\\proj'] },
+    { id: 'c', name: 'C', launch: { exe: 'C:\\c.exe' }, sessions: [], workspaces: [] },
+  ] })
+  check('只有 sessions/workspaces 双空的条目计入 unauthCount', rt.currentConfig().unauthCount === 1, String(rt.currentConfig().unauthCount))
+}
+
 // ---------- 收尾 ----------
 
 for (const dir of tmpDirs) {

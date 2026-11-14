@@ -96,7 +96,24 @@ window.__ModuleLoader__.load({
       return { ...state, reload }
     }
 
-      return { useStatus, useConfig, useSessions }
+    /** 工作区列表：GET /workspaces（宿主 workspaceRegistry）。授权工作区＝其下所有会话默认可用。 */
+    function useWorkspaces() {
+      const [state, setState] = React.useState({ loading: true, workspaces: [], source: 'none', error: null })
+      const reload = React.useCallback(async () => {
+        setState((prev) => ({ ...prev, loading: true }))
+        try {
+          const res = await jsonFetch('/workspaces')
+          if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
+          setState({ loading: false, workspaces: res.body.workspaces ?? [], source: res.body.source ?? 'none', error: null })
+        } catch (err) {
+          setState({ loading: false, workspaces: [], source: 'none', error: err instanceof Error ? err.message : String(err) })
+        }
+      }, [])
+      React.useEffect(() => { reload() }, [reload])
+      return { ...state, reload }
+    }
+
+      return { useStatus, useConfig, useSessions, useWorkspaces }
     }
     return { build }
   },

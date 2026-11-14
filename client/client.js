@@ -10,26 +10,32 @@
  *   chunk 职责（单一职责）：
  *     client.i18n.js      文案字典 zh / en
  *     client.core.js      常量 + 样式 S + 纯函数工具（格式化 / HTTP / 提示色）
- *     client.hooks.js     数据 hooks：useStatus / useConfig / useSessions
+ *     client.hooks.js     数据 hooks：useStatus / useConfig / useSessions / useWorkspaces
  *     client.controls.js  基础控件：Pill / Field / TextInput / TextArea / ErrorBoundary / Switch / Modal
  *     client.cards.js     展示卡片：AppCard / DirectoryCard / SystemCard
- *     client.sessions.js  会话授权：SessionPicker / SessionAuthDialog / SessionGrantPanel / GrantsLog
+ *     client.sessions.js  会话/工作区授权：SessionPicker / WorkspacePicker / SessionAuthDialog / SessionGrantPanel / GrantsLog
  *     client.form.js      条目表单：emptyForm / toForm / fromForm / ProgramForm
  *     client.panel.js     面板与入口：LauncherSection / MenuScopeRow / SessionScopeButton /
  *                         PanelLauncherIcon / LauncherPanel
  *
  *   依赖方向（无环）：i18n / core ← hooks / controls ← cards / sessions ← form ← panel。
  *
- * ★ 权限模型：统一「软件/脚本/目录」条目池 + 每条目 sessions[] 按会话授权，
- *   无全局/工作区授权层；设置页是管理面（看全部），工具调用按会话过滤。
+ * ★ 权限模型：统一「软件/脚本/目录」条目池 + 每条目按会话/工作区授权
+ *   （sessions[] + workspaces[]）。授权工作区＝其下所有会话默认可用（含新增）。
+ *   无全局授权层；设置页是管理面（看全部），工具调用按会话过滤。
  *
  * ★ 接口（宿主侧 lib/http.mjs）：/status /config /config/global /config/program
- *   /config/entry-sessions /config/reset /sessions /grants /browse /start /stop /verify /log。
+ *   /config/entry-sessions /config/entry-grants /config/reset /sessions /workspaces
+ *   /grants /browse /start /stop /verify /log。
+ *
+ * ★ 弹框用 react-dom createPortal 挂到 document.body：会话标题动作带会裁剪
+ *   overflow（slot 契约 overlays must portal），内联覆盖层会被裁掉。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-app-launcher',
   factory(require) {
     const React = require('react')
+    const ReactDOM = require('react-dom')
     const h = React.createElement
     const NS = 'dsh-app-launcher'
 
@@ -55,7 +61,7 @@ window.__ModuleLoader__.load({
       const i18n = i18nM.build()
       const core = coreM.build()
       const hooks = hooksM.build({ React, core })
-      const controls = controlsM.build({ React, h, core })
+      const controls = controlsM.build({ React, ReactDOM, h, core })
       const cards = cardsM.build({ h, core, controls })
       const sessions = sessionsM.build({ React, h, core, controls, hooks })
       const form = formM.build({ React, h, core, controls, sessions })
@@ -106,19 +112,23 @@ window.__ModuleLoader__.load({
       }, () => h(ErrorBoundary, null, h(LauncherPanel, { t }))))
 
       // ============ 会话顶部入口（只影响当前会话） ============
+      // ★ inject 回调第一参就是 sessionId（session-scope slot 契约）；显式接住并回传，
+      //   不依赖 props 自动注入，确保弹框一定拿得到会话 id。
       ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
         name: 'conversation.session.header.actions',
         id: `${NS}-session`,
         order: 120,
         label: () => t('navAuth'),
         locale: NS,
-        inject: () => ({ t }),
+        inject: (sessionId) => ({ t, sessionId }),
       }, (props) => h(ErrorBoundary, null,
         h(SessionScopeButton, { t, sessionId: props?.sessionId }))))
 
-      // ============ 为什么没有「工作区入口」 ============
-      // ★ poolVersion 2 起授权粒度是「条目 × 会话」，不再有工作区/全局授权层。
-      //   旧版工作区授权在宿主侧迁移时展开成会话授权（runtime.expandWorkspaceGrants）。
+      // ============ 工作区授权说明 ============
+      // ★ poolVersion 2 起授权粒度是「条目 × 会话 / 工作区」：每个条目可授权给若干会话，
+      //   也可授权给整个工作区（其下所有会话默认可用，含之后新增的）。没有独立的
+      //   「工作区入口」slot——工作区授权在条目授权弹框/表单里完成。旧版工作区切片
+      //   授权在宿主侧迁移时展开成会话授权（runtime.expandWorkspaceGrants）。
 
       // ============ 会话「...」菜单入口（与会话的重命名/归档并列） ============
       ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
@@ -127,7 +137,7 @@ window.__ModuleLoader__.load({
         order: 460,
         label: () => t('navAuth'),
         locale: NS,
-        inject: () => ({ t }),
+        inject: (sessionId) => ({ t, sessionId }),
       }, (props) => h(ErrorBoundary, null,
         h(MenuScopeRow, { t, sessionId: props?.sessionId }))))
     }

@@ -84,6 +84,14 @@ const React = {
 }
 React.default = React
 
+// react-dom seed：createPortal 原样返回 children（让 renderNode 继续渲染覆盖层），
+// 并记录调用，供「弹框必须 portal」用例断言。
+const portalCalls = []
+const ReactDOM = {
+  createPortal(children, container) { portalCalls.push({ children, container }); return children },
+}
+ReactDOM.default = ReactDOM
+
 const dicts = {}
 const locale = {
   register(ns, d) { dicts[ns] = d; return () => {} },
@@ -116,13 +124,17 @@ const SESSIONS = [
   { id: 'sess-a', title: '会话 A', live: true, subagent: false, createdAt: 1 },
   { id: 'sess-b', title: '', live: false, subagent: true, createdAt: 2 },
 ]
+const WORKSPACES = [
+  { id: 'ws-1', path: 'D:\\proj\\alpha', title: 'Alpha', sessionCount: 2 },
+  { id: 'ws-2', path: 'D:\\proj\\beta', title: 'Beta', sessionCount: 1 },
+]
 const CONFIG_BODY = {
   ok: true,
   config: {
     revision: 1, poolVersion: 2, enabled: true, unauthCount: 1, migrationPending: [],
     programs: [
-      { id: 'comfyui', name: 'ComfyUI', kind: 'program', enabled: true, sessions: ['sess-a'], launch: { exe: 'C:\\x\\a.exe' } },
-      { id: 'models', name: '模型目录', kind: 'directory', enabled: true, sessions: [], path: 'D:\\models' },
+      { id: 'comfyui', name: 'ComfyUI', kind: 'program', enabled: true, sessions: ['sess-a'], workspaces: ['D:\\proj\\alpha'], launch: { exe: 'C:\\x\\a.exe' } },
+      { id: 'models', name: '模型目录', kind: 'directory', enabled: true, sessions: [], workspaces: [], path: 'D:\\models' },
     ],
   },
 }
@@ -130,11 +142,14 @@ globalThis.fetch = async (url) => {
   const u = String(url)
   let body
   if (u.includes('/sessions')) body = { ok: true, source: 'sessionQuery', sessions: SESSIONS }
+  else if (u.includes('/workspaces')) body = { ok: true, source: 'workspaceRegistry', workspaces: WORKSPACES }
   else if (u.includes('/config')) body = CONFIG_BODY
   else if (u.includes('/grants')) body = { ok: true, grants: [{ at: Date.now(), scope: 'entry', action: 'add', target: 'sess-a' }] }
   else body = { ok: true, plugin: {}, system: {}, programs: [], gates: {}, logs: {}, directories: [] }
   return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body }
 }
+// 假 DOM：让 Modal 的 createPortal 分支真的被走到（无 document 时会退回内联）。
+globalThis.document = { body: { __fakeBody: true } }
 
 // ---- 加载器：模拟 DSH 的 entry + package-local chunk 机制 ----
 // overrides: { 'client.<name>.js': 源码 }，用于反向验证时替换某个 chunk。
@@ -145,8 +160,13 @@ async function loadPlugin(overrides = {}) {
     __ModuleLoader__: {
       load(reg) { if (reg.chunk) chunkRegs.set(reg.chunk, reg); else entryReg = reg },
     },
+    addEventListener() {}, removeEventListener() {},
   }
-  const fakeRequire = (name) => { if (name === 'react') return React; throw new Error('unexpected sync require: ' + name) }
+  const fakeRequire = (name) => {
+    if (name === 'react') return React
+    if (name === 'react-dom') return ReactDOM
+    throw new Error('unexpected sync require: ' + name)
+  }
   fakeRequire.async = async (spec) => {
     const file = spec.replace(/^\.\//, '')
     if (!chunkRegs.has(file)) {
@@ -178,11 +198,15 @@ const exports = {
   ErrorBoundary: captured.controls.ErrorBoundary,
   DirectoryCard: captured.cards.DirectoryCard,
   SessionPicker: captured.sessions.SessionPicker,
+  WorkspacePicker: captured.sessions.WorkspacePicker,
   SessionAuthDialog: captured.sessions.SessionAuthDialog,
   SessionGrantPanel: captured.sessions.SessionGrantPanel,
   GrantsLog: captured.sessions.GrantsLog,
+  SessionScopeButton: captured.panel.SessionScopeButton,
+  MenuScopeRow: captured.panel.MenuScopeRow,
+  Modal: captured.controls.Modal,
 }
-if (!exports.ProgramForm || !exports.DirectoryCard || !exports.SessionPicker || !exports.SessionGrantPanel) {
+if (!exports.ProgramForm || !exports.DirectoryCard || !exports.SessionPicker || !exports.SessionGrantPanel || !exports.WorkspacePicker || !exports.SessionScopeButton) {
   console.log('✗ 未能拿到全部待测组件')
   process.exit(1)
 }
@@ -191,12 +215,15 @@ const t = locale.bind('dsh-app-launcher')
 const problems = []
 let seen = new Set()
 let checkboxCount = 0
+let collectMode = false
+let collectedNodes = []
 
 function renderNode(node, budget = { n: 0 }) {
   if (node === null || node === undefined || typeof node === 'boolean') return
   if (typeof node === 'string' || typeof node === 'number') return
   if (node === '__fragment__') return
   if (Array.isArray(node)) { for (const n of node) renderNode(n, budget); return }
+  if (collectMode && node && typeof node === 'object' && node.type !== undefined) collectedNodes.push(node)
 
   if (typeof node.type === 'function') {
     budget.n += 1
@@ -308,11 +335,12 @@ renderOnce(exports.DirectoryCard, {
 })
 console.log('用例6 目录卡片：ok（组件 ' + seen.size + ' 种）')
 
-// ---- 用例 7：SessionAuthDialog（单条目授权弹框，加载分支）----
-await renderLoaded(exports.SessionAuthDialog, { entry: { id: 'comfyui', name: 'ComfyUI', sessions: ['sess-a'] }, t, onClose() {}, onSaved() {} })
+// ---- 用例 7：SessionAuthDialog（单条目授权弹框：会话 + 工作区两段，加载分支）----
+await renderLoaded(exports.SessionAuthDialog, { entry: { id: 'comfyui', name: 'ComfyUI', sessions: ['sess-a'], workspaces: ['D:\\proj\\alpha'] }, t, onClose() {}, onSaved() {} })
 if (!seen.has('SessionPicker')) problems.push('用例7 未渲染到 SessionPicker')
+if (!seen.has('WorkspacePicker')) problems.push('用例7 未渲染到 WorkspacePicker（工作区授权段缺失）')
 if (checkboxCount === 0) problems.push('用例7 SessionPicker 未走到勾选列表')
-console.log('用例7 会话授权弹框：ok（组件 ' + seen.size + ' 种，勾选框 ' + checkboxCount + '）')
+console.log('用例7 会话/工作区授权弹框：ok（组件 ' + seen.size + ' 种，勾选框 ' + checkboxCount + '）')
 
 // ---- 用例 8：SessionGrantPanel（本会话授权，加载出条目开关）----
 await renderLoaded(exports.SessionGrantPanel, { sessionId: 'sess-a', t })
@@ -362,6 +390,48 @@ await renderLoaded(exports.LauncherSection, { t })
 if (!seen.has('AppCard') && !seen.has('DirectoryCard')) problems.push('用例14 整面板未渲染到任何条目卡片（假通过）')
 if (!seen.has('SystemCard')) problems.push('用例14 整面板未渲染到 SystemCard')
 console.log('用例14 整面板：ok（组件 ' + seen.size + ' 种）')
+
+// ---- 用例15：WorkspacePicker（工作区多选，加载出勾选列表）----
+await renderLoaded(exports.WorkspacePicker, { selected: ['D:\\proj\\alpha'], onChange() {}, t })
+if (checkboxCount === 0) problems.push('用例15 WorkspacePicker 未走到勾选列表（仍是 loading，假通过）')
+console.log('用例15 工作区选择器：ok（勾选框 ' + checkboxCount + '）')
+
+// ---- 用例16：★会话顶部「授权」按钮点击真弹框 + 必须 portal（问题1 回归）----
+// 先渲染按钮（open=false），收集节点找到按钮并点击（setOpen(true)），再渲染一遍 → Modal 出现。
+resetCase()
+collectMode = true; collectedNodes = []
+renderTree(createElement(exports.SessionScopeButton, { sessionId: 'sess-a', t }))
+collectMode = false
+const authBtn = collectedNodes.find((n) => n.type === 'button')
+if (!authBtn || typeof authBtn.props?.onClick !== 'function') {
+  problems.push('用例16 未找到授权按钮或其 onClick')
+} else {
+  const portalsBefore = portalCalls.length
+  authBtn.props.onClick({ stopPropagation() {} }) // setOpen(true)
+  renderTree(createElement(exports.SessionScopeButton, { sessionId: 'sess-a', t }))
+  if (!seen.has('Modal')) problems.push('用例16 点击授权按钮后未渲染 Modal（弹框打不开）')
+  if (!seen.has('SessionGrantPanel')) problems.push('用例16 弹框内未渲染 SessionGrantPanel')
+  if (portalCalls.length <= portalsBefore) problems.push('用例16 Modal 未走 createPortal（会被会话标题带裁剪）')
+  await drain(); await drain(); await drain()
+  renderTree(createElement(exports.SessionScopeButton, { sessionId: 'sess-a', t }))
+  if (!seen.has('Switch')) problems.push('用例16 弹框内 SessionGrantPanel 未加载出条目开关')
+}
+console.log('用例16 授权按钮点击弹框（portal）：ok（组件 ' + seen.size + ' 种）')
+
+// ---- 用例17：会话「...」菜单入口点击同样弹框 ----
+resetCase()
+collectMode = true; collectedNodes = []
+renderTree(createElement(exports.MenuScopeRow, { sessionId: 'sess-a', t }))
+collectMode = false
+const menuBtn = collectedNodes.find((n) => n.type === 'button')
+if (!menuBtn || typeof menuBtn.props?.onClick !== 'function') {
+  problems.push('用例17 未找到菜单授权按钮或其 onClick')
+} else {
+  menuBtn.props.onClick({ stopPropagation() {} })
+  renderTree(createElement(exports.MenuScopeRow, { sessionId: 'sess-a', t }))
+  if (!seen.has('Modal')) problems.push('用例17 菜单入口点击后未渲染 Modal')
+}
+console.log('用例17 菜单授权入口弹框：ok')
 
 if (problems.length > 0) {
   console.log('\n✗ 发现渲染错误:')

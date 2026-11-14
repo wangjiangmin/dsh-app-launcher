@@ -18,6 +18,7 @@ import {
   effectiveAllowedDirs,
   inferScriptInterpreter,
   normalizeSessions,
+  normalizeWorkspaces,
 } from '../lib/config.mjs'
 import {
   evaluateResourceGate,
@@ -1497,6 +1498,13 @@ await test('normalizeSessions 去空去重 trim、非数组返空', () => {
   assert.deepEqual(normalizeSessions(undefined), [])
 })
 
+await test('normalizeWorkspaces 绝对路径去重去尾分隔符、非数组返空', () => {
+  assert.deepEqual(normalizeWorkspaces(['D:\\proj\\', 'd:\\proj', 'E:\\other']), ['D:\\proj', 'E:\\other'])
+  assert.deepEqual(normalizeWorkspaces(['relative/path', '']), [])
+  assert.deepEqual(normalizeWorkspaces('not-array'), [])
+  assert.deepEqual(normalizeWorkspaces(undefined), [])
+})
+
 await test('normalizeProgram directory：绝对路径 valid 且 launchable=false', () => {
   const ok = normalizeProgram({ name: '模型', kind: 'directory', path: 'H:\\models' }, 0)
   assert.equal(ok.valid, true)
@@ -1533,9 +1541,12 @@ await test('validateProgram script：未知扩展名且无解释器被拒，显�
   assert.throws(() => validateProgram({ name: 'S', kind: 'script', launch: {} }), /脚本路径/)
 })
 
-await test('validateProgram 拒绝非法 kind 与非数组 sessions', () => {
+await test('validateProgram 拒绝非法 kind 与非数组 sessions/workspaces', () => {
   assert.throws(() => validateProgram({ name: 'A', kind: 'weird', launch: { exe: 'C:/a.exe' } }), /program \/ script \/ directory/)
   assert.throws(() => validateProgram({ name: 'A', launch: { exe: 'C:/a.exe' }, sessions: 's1' }), /会话 id 数组/)
+  assert.throws(() => validateProgram({ name: 'A', launch: { exe: 'C:/a.exe' }, workspaces: 'D:\\x' }), /工作区路径数组/)
+  const ok = validateProgram({ name: 'A', launch: { exe: 'C:/a.exe' }, sessions: ['s1'], workspaces: ['D:\\proj'] })
+  assert.deepEqual(ok.workspaces, ['D:\\proj'])
 })
 
 await test('buildCommand script：.ps1 交给 powershell -File', () => {
@@ -1573,18 +1584,20 @@ await test('resolveConfig poolVersion：缺省 1，显式 2 保留', () => {
   assert.equal(resolveConfig({ poolVersion: 2, programs: [] }).poolVersion, 2)
 })
 
-await test('toFormProgram/fromFormProgram 往返保留 kind/sessions/path/interpreter', () => {
-  const dir = normalizeProgram({ name: '模型', kind: 'directory', path: 'H:\\models', sessions: ['s1'] }, 0)
+await test('toFormProgram/fromFormProgram 往返保留 kind/sessions/workspaces/path/interpreter', () => {
+  const dir = normalizeProgram({ name: '模型', kind: 'directory', path: 'H:\\models', sessions: ['s1'], workspaces: ['D:\\proj'] }, 0)
   const dirBack = fromFormProgram(toFormProgram(dir))
   assert.equal(dirBack.kind, 'directory')
   assert.equal(dirBack.path, 'H:\\models')
   assert.deepEqual(dirBack.sessions, ['s1'])
+  assert.deepEqual(dirBack.workspaces, ['D:\\proj'])
 
-  const script = normalizeProgram({ name: 'S', kind: 'script', launch: { exe: 'C:/x/run.py', interpreter: 'C:/py/python.exe' }, sessions: ['s2'] }, 0)
+  const script = normalizeProgram({ name: 'S', kind: 'script', launch: { exe: 'C:/x/run.py', interpreter: 'C:/py/python.exe' }, sessions: ['s2'], workspaces: ['E:\\ws'] }, 0)
   const scriptBack = fromFormProgram(toFormProgram(script))
   assert.equal(scriptBack.kind, 'script')
   assert.equal(scriptBack.launch.interpreter, 'C:/py/python.exe')
   assert.deepEqual(scriptBack.sessions, ['s2'])
+  assert.deepEqual(scriptBack.workspaces, ['E:\\ws'])
 })
 
 // ---------- HTTP 同源 ----------

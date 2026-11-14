@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-app-launcher',
   chunk: 'client.controls.js',
   factory(require) {
-    function build({ React, h, core }) {
+    function build({ React, ReactDOM, h, core }) {
       const { S, TONES } = core
 
     // ==================== 小工具 ====================
@@ -122,7 +122,7 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('keydown', onKey)
       }, [onClose])
 
-      return h('div', {
+      const overlay = h('div', {
         style: {
           position: 'fixed', inset: 0, zIndex: 9999,
           background: 'color-mix(in srgb, #000 45%, transparent)',
@@ -159,6 +159,14 @@ window.__ModuleLoader__.load({
         'aria-label': t('close'),
       }, '✕')),
       h('div', { style: { padding: '14px 16px', overflow: 'auto' } }, children)))
+
+      // ★ 会话标题动作带会裁剪/淡出 overflow（slot 契约：overlays must portal）。
+      //   内联 fixed 覆盖层渲染在按钮旁会被裁掉 → 用 createPortal 挂到 document.body，
+      //   脱离任何祖先的 overflow/transform 裁剪。无 DOM（测试）时退回内联渲染。
+      if (typeof document !== 'undefined' && document.body && ReactDOM && typeof ReactDOM.createPortal === 'function') {
+        return ReactDOM.createPortal(overlay, document.body)
+      }
+      return overlay
     }
 
     // ==================== 会话授权（统一条目池，poolVersion 2） ====================

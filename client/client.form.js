@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     function build({ React, h, core, controls, sessions }) {
       const { S, noticeTone } = core
       const { Field, TextInput, TextArea, Switch } = controls
-      const { SessionPicker } = sessions
+      const { SessionPicker, WorkspacePicker } = sessions
 
     // ==================== 编辑表单 ====================
     function emptyForm() {
@@ -14,6 +14,7 @@ window.__ModuleLoader__.load({
         kind: 'program',
         id: '', name: '', enabled: true, description: '',
         sessions: [],
+        workspaces: [],
         path: '',
         exe: '', args: '', cwd: '', envText: '', interpreter: '',
         allowedDirs: [],
@@ -33,6 +34,7 @@ window.__ModuleLoader__.load({
         enabled: program.enabled,
         description: program.description ?? '',
         sessions: (program.sessions ?? []).slice(),
+        workspaces: (program.workspaces ?? []).slice(),
         path: program.path ?? '',
         exe: program.launch?.exe ?? '',
         args: (program.launch?.args ?? []).join(' '),
@@ -68,6 +70,7 @@ window.__ModuleLoader__.load({
         enabled: form.enabled !== false,
         description: String(form.description ?? '').trim(),
         sessions: (form.sessions ?? []).slice(),
+        workspaces: (form.workspaces ?? []).slice(),
       }
       // 目录条目只有路径，没有启动参数
       if (kind === 'directory') {
@@ -220,10 +223,14 @@ window.__ModuleLoader__.load({
         isDir ? null : h(Field, { label: t('f_readyUrl'), hint: t('f_readyUrlTip') },
           h(TextInput, { value: form.readyUrl, onChange: (v) => set({ readyUrl: v }), placeholder: 'http://127.0.0.1:8188/system_stats' })),
 
-        // 会话授权：所有类型的条目都有；不勾选任何会话＝对所有会话不可见
+        // 会话授权：所有类型的条目都有；不勾选任何会话/工作区＝对所有会话不可见
         h('div', { style: S.divider }),
         h(Field, { label: t('authTitle'), hint: t('authTip') },
           h(SessionPicker, { selected: form.sessions, onChange: (v) => set({ sessions: v }), t })),
+
+        // 工作区授权：授权整个工作区＝其下所有会话（含新增）默认可用
+        h(Field, { label: t('authWorkspaces'), hint: t('authWorkspacesTip') },
+          h(WorkspacePicker, { selected: form.workspaces, onChange: (v) => set({ workspaces: v }), t })),
 
         h('div', { style: S.divider }),
         h('div', { style: S.switchRow },

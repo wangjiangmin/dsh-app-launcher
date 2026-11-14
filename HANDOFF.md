@@ -1,6 +1,6 @@
 # 交接文档：dsh-app-launcher（显示名：本地授权）
 
-> 更新 2026-11-14（T24 权限重构 `b273496`；客户端拆分组合根+8 chunk `0f6c58d`）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
+> 更新 2026-11-14（T24 权限重构 `b273496`；客户端拆分组合根+8 chunk `0f6c58d`；工作区授权+弹框 portal 修复 见 §〇）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
 > 来源会话「资源监控与软件自启动插件方案」= `session-2be05f3c-fa59-4574-8127-b502bcf27867`
 > （2026-11-08 19:57 → 11-14 01:00，27 轮，1269 次工具调用；上下文 ~1,048,365 tokens 溢出而死）。
 > 原始日志：`C:\Users\wjm\.dsh\sessions\--D-wjm-Documents-deepseek-harness-default-workspace--\session-2be05f3c-fa59-4574-8127-b502bcf27867\session.v4.jsonl.zstd`（多帧 zstd，按 magic `28 B5 2F FD` 切帧解）。
@@ -10,25 +10,25 @@
 ## 〇、一句话现状
 
 插件**已安装可用**：desktop profile bundles 已选中、Junction 链接指向工作区、用户层配置在位、
-**218 项逻辑测试全绿** + 门面/渲染测试（14 用例+反向验证）、git HEAD `0f6c58d`、工作区干净。
+**244 项逻辑测试全绿** + 门面/渲染测试（17 用例+反向验证）、工作区干净。
 客户端已拆为组合根 + 8 个职责 chunk（commit `0f6c58d`，详见 §四与 README「客户端文件结构」）。
 
-**★ T24 权限重构已完成（2026-11-14，commit `b273496`，21 文件 +2173/−1307）。** 用户最后一条需求：
+**★ 本轮修复 3 个授权问题（用户 m01212，2026-11-14）：**
 
-> 「1. 收缩权限 , 不允许全局开发授权.将目录合并到软件/脚本这个面板上,更新为 `软件/脚本/目录`面板,进行统一管理. 2. 每一条`软件/脚本/目录`的面板上添加一个会话授权,可选择授权给那个会话.」
+> 「1. 会话顶部的`授权`入口有问题,无法正常弹框. 2. 没有工作区授权功能,功能区授权后,整个工作区的会话默认可用. 3. 授权页面,无法正常获取会话和工作区,照成无法正常授权.」
 
-已落地（详见 §三「四代」与 README §六点五）：
-- **统一条目池**（poolVersion 2）：`programs[]` 里每条带 `kind=program/script/directory` + `sessions:[会话id]`；
-  `sessions=[]`=未授权任何会话（默认最安全），会话只见 `sessions` 含自己的条目。
-- **取消全局授权层**：`setGlobal` 收到 `allowedDirs` 直接报错；旧全局目录迁移成 `sessions=[]` 的目录条目（收缩，需重新勾选）。
-- **每条目会话授权**：设置页表单底部 / 卡片「授权」按钮 / 会话标题旁「本会话授权」入口，三处都能勾选；
-  会话选择器数据源＝宿主 `sessionQuery`（`listSessions`+`readTitleSnapshots`），降级 `workspaceRegistry`。
-- 旧会话切片授权折进 `sessions[]`；工作区切片由 `workspaceRegistry` 就绪后展开成名下会话授权（`expandWorkspaceGrants`）。
-- `scopes.json` 只留 `grants` 审计；迁移一次性，重启不重复。
+- **问题1（弹框打不开）根因＝内联 Modal 被会话标题动作带裁剪**。slot 契约原文「overflow is clipped and faded … overlays must portal」。
+  修复：`client.controls.js` 的 Modal 用 `react-dom` `createPortal(overlay, document.body)`（无 DOM 时退回内联，保渲染测试）；
+  entry 两个会话 slot 的 `inject` 改 `(sessionId)=>({t,sessionId})` 稳妥送达会话 id。render.mjs 用例16/17 点击按钮真弹框+断言 portal。
+- **问题2（工作区授权）＝条目加 `workspaces:[]`**（规范工作区路径，pathKey 归一）。可见性＝`sessions.includes(sid)` **或** 所属工作区 pathKey ∈ `workspaces`（`_entryVisibleTo` runtime.mjs:542）——
+  **授权工作区＝其下所有会话默认可用，含之后新增的**（动态，不展开成会话 id）。新增 `setEntryGrants(id,{sessions,workspaces})`/`setEntryWorkspaces`/`listWorkspaces()`；
+  HTTP `GET /workspaces`、`POST /config/entry-grants`；client 加 `WorkspacePicker` + `useWorkspaces`，授权弹框/表单/卡片都带工作区段。poolVersion 仍 2（workspaces 默认 [] 无需迁移）。
+- **问题3（取不到会话/工作区）根因＝运行中的宿主还是 pre-T24 旧代码（从未重启）**：实测 `GET /sessions`→404、`/config` 返回旧形状。
+  代码本身正确（`listSessions`/`listWorkspaces` + `/sessions`/`/workspaces` 路由 + 宿主 `sessionQuery`/`workspaceRegistry` inject 都在），**重启 DSH 后即恢复**。
 
-**⚠️ 用户侧待验证**：host 改动需**重启 DSH**、client 改动需**刷新浏览器**才生效（Junction 磁盘代码已即时最新）。
-重启后旧 config.json（poolVersion 1）会自动迁移成 2，4 个出厂程序变成 `sessions=[]`（未授权）——
-**这是收缩的本意**：用户需在设置页把它们勾选授权给相应会话，Agent 才能看到/启动。
+**⚠️ 用户侧必做**：host 改动需**重启 DSH**、client 改动需**刷新浏览器**才生效（Junction 磁盘代码已即时最新）。
+**当前运行的宿主仍是 pre-T24 旧代码——不重启则问题3 依旧、工作区授权也不生效。** 重启后旧 config.json（poolVersion 1）自动迁移成 2，
+4 个出厂程序变 `sessions=[]`（未授权）——**这是收缩的本意**：需在设置页把它们勾选授权给相应会话/工作区，Agent 才能看到/启动。
 
 **会话死因（旧会话）**：T26 `/compact` 未真正压缩；T27 切模型后 `400 … "Range of input length should be [1, 983616]"`，
 code=CONTEXT_WINDOW_EXCEEDED（~1,048,365 tokens）。**新会话不要试图复活旧会话，直接以本文档接手。**
@@ -84,9 +84,9 @@ code=CONTEXT_WINDOW_EXCEEDED（~1,048,365 tokens）。**新会话不要试图复
 1. **一代**：全局 allowedDirs 总表 → 被用户否定：「授权目录应该是跟着软件走的」。
 2. **二代**：per-program allowedDirs（生效＝程序自己的 ∪ 全局兜底）；路径**边界**比较（`C:\Apps2` 不被 `C:\Apps` 放行）；空名单一律拒绝；相对路径抛 ConfigValidationError。
 3. **三代（e8b9154，已被四代取代）**：global/workspace/session 三级并集。目录三层并集；程序同 id 后者覆盖。工作区 key 用 canonical 路径不用 workspaceId。
-4. **四代（b273496，现行 poolVersion 2）**：用户 T24 要求**收缩**——取消全局/工作区层，改**统一条目池 + 每条目按会话授权**。
-   - 条目 `kind=program/script/directory`，各带 `sessions:[会话id]`；`sessions=[]`=未授权（默认）。
-   - 可见性：`_scopeContext===null`=管理面（设置页看全部）；`withAgentScope` 设 `{sessionId}`→只留 `sessions.includes(sid)`；`sid===''` fail-closed（`_visibleEntries` runtime.mjs:479）。
+4. **四代（b273496，现行 poolVersion 2）**：用户 T24 要求**收缩**——取消全局层，改**统一条目池 + 每条目按会话/工作区授权**。
+   - 条目 `kind=program/script/directory`，各带 `sessions:[会话id]` + `workspaces:[工作区路径]`；两者都空=未授权（默认）。
+   - 可见性：`_scopeContext===null`=管理面（设置页看全部）；`withAgentScope` 设 `{sessionId}`→`_entryVisibleTo`＝`sessions.includes(sid)` 或 所属工作区 pathKey∈`workspaces`（`_visibleEntries` runtime.mjs:526）；`sid===''` fail-closed。**工作区授权是动态的**：经 `setWorkspaceResolver`（index.js 用 workspaceRegistry 把 sid→工作区路径）解析，该工作区下新增会话自动可见，不展开成 id。
    - `visiblePrograms()` 排除 directory；`visibleDirectories()` 只 directory；`allowedDirsOf`=程序自身 dirs ∪ 可见目录条目 path。
    - 快照缓存键按视角分 `admin` / `session:<sid>`（管理面与会话面不互用）。
    - 迁移 `_migratePool()`（runtime.mjs:94）：全局目录→sessions=[] 目录条目；会话切片折进 sessions[]；工作区切片暂存 `_pendingWorkspaceGrants`，`expandWorkspaceGrants`（:203）由 index.js 的 workspaceRegistry inject 展开。
@@ -111,12 +111,13 @@ lib/ index.js(入口/门面★必须显式转发每个新方法) config.mjs stor
      runtime.mjs scopes.mjs verify.mjs
 client/client.js（★组合根：加载+装配+注册 slot）+ 8 个职责 chunk：client.i18n/core/hooks/
      controls/cards/sessions/form/panel.js（各导出 build(deps)，依赖显式传入，无构建步骤）
-test/ verify.mjs(136) scopes.mjs(19) workspace-scope.mjs(31) lazy.mjs(19) hot-reload.mjs(13)
-      facade.mjs(静态核对面面转发) render.mjs(按组件实例分派 hook 真渲染到加载分支+反向验证，14 用例)
+test/ verify.mjs(137) scopes.mjs(19) workspace-scope.mjs(56) lazy.mjs(19) hot-reload.mjs(13)
+      facade.mjs(静态核对面面转发) render.mjs(按组件实例分派 hook 真渲染到加载分支+反向验证，17 用例)
 ```
 
-跑测试：`npm run verify`（package.json scripts.verify 串起全部 7 个）。**218 项逻辑全绿**（136+19+31+19+13）+ facade + render。
-render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceError），否则假通过；v4 已修「全局 hookStore 让嵌套组件 hook 互踩」与「children 没进 props 导致子组件没渲染」两个假通过隐患。**v5（拆分后）**：loadPlugin() 模拟 `require.async` 逐个加载 chunk、await 异步 apply、用 `__DSH_LAUNCHER_TEST_HOOK__` 抓已装配模块；假 React 的 **useEffect/useCallback/useMemo 都各占一个 hook 槽、每个 effect 独立跑一次**——旧版单个 effectRan 标志会让 LauncherSection 里 useConfig 的 effect 被 useStatus 的挤掉（配置加载不出、整面板假通过）。反向验证改为替换 client.form.js 源码再加载。
+跑测试：`npm run verify`（package.json scripts.verify 串起全部 7 个）。**244 项逻辑全绿**（137+19+56+19+13）+ facade + render。
+workspace-scope.mjs 含工作区授权可见性（sessions OR workspaces、pathKey 归一、目录条目、fail-closed）、setEntryGrants/setEntryWorkspaces 审计、listWorkspaces、unauthCount 双空。
+render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceError），否则假通过；v4 已修「全局 hookStore 让嵌套组件 hook 互踩」与「children 没进 props 导致子组件没渲染」两个假通过隐患。**v5（拆分后）**：loadPlugin() 模拟 `require.async` 逐个加载 chunk、await 异步 apply、用 `__DSH_LAUNCHER_TEST_HOOK__` 抓已装配模块；假 React 的 **useEffect/useCallback/useMemo 都各占一个 hook 槽、每个 effect 独立跑一次**——旧版单个 effectRan 标志会让 LauncherSection 里 useConfig 的 effect 被 useStatus 的挤掉（配置加载不出、整面板假通过）。反向验证改为替换 client.form.js 源码再加载。**v6（工作区授权）**：加 react-dom seed（createPortal 原样返回+记录 portalCalls）、假 document.body、renderNode 收集节点供点击；用例16/17 点 SessionScopeButton/MenuScopeRow 真弹框并断言 Modal+portal；点击 onClick 必须传 `{stopPropagation(){}}`。
 **工具 execute 签名**：app_list/system_status 是 `execute(exec)` 单参；app_start/app_stop/app_verify/app_toggle 是 `execute(args, exec)` 双参（写测试别搞混）。
 
 ---
@@ -138,7 +139,7 @@ render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceE
 
 ## 六、Open items（按优先级）
 
-1. **★ 用户侧验证 T24**：重启 DSH + 刷新浏览器 → 旧 config 自动迁移 poolVersion 2 → 设置页「软件/脚本/目录」把 4 个出厂程序勾选授权给相应会话 → 会话内 `app_list` 应只见已授权条目；不重开会话经「授权」加会话后再 `app_list` 应即时见变化（热加载）。
+1. **★ 用户侧验证（必做）**：**重启 DSH + 刷新浏览器**（当前运行的宿主还是 pre-T24 旧代码，不重启则问题3「取不到会话/工作区」依旧、工作区授权也不生效）→ 旧 config 自动迁移 poolVersion 2 → 设置页「软件/脚本/目录」把 4 个出厂程序勾选授权给相应会话/工作区 → 会话内 `app_list` 应只见已授权条目；会话顶部「授权」按钮应能弹框（portal）；授权工作区后其下所有会话默认可用；不重开会话经「授权」加会话后再 `app_list` 应即时见变化（热加载）。
 2. **5 秒 MiniMax H3 视频**（TURN 7 起遗留）：工作流 `F:\program\ComfyUI\user\default\workflows\my_video_minimax_h3_t2v.json`（UI 图含子图「Image to Video (MiniMax H3)」21 节点，**子图不支持提取**；路径①请用户在面板转回普通节点再提取，②手工拼 API）。**模型名待用户拍板**：工作流写 `minimax_h3_fl2va_pruned_int8_convrot` / `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16`，本机实有 `minimax_h3_fl2va_pruned_fp8_scaled`(19.52GB, H:\apps\ComfyUI\models\diffusion_models) / `minimax_h3_turbo_v4_step600_ema_pruned_comfyui`(0.58GB, loras)。5 秒=124 帧@24fps（17k+5 网格对齐）。MiniMaxH3ImageToVideo 签名：clip/vae/prompt/width(1344,step32)/height(768)/length，optional first_frame/last_frame。
 3. **TURN 8 INBOX 从未处理**：「清理旧版 comfyui 是否有问题? 没有问题就删除了.同时记得更新相关记忆.」——旧后端 `C:\Users\wjm\AppData\Local\Programs\ComfyUI\resources\ComfyUI` 是 0.17.1 过时路径；未删、未写记忆。
 4. （已完成）T24 权限重构：见 §〇 / §三四代，commit `b273496`。

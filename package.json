@@ -11,7 +11,7 @@
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "description": "本地授权：统一管理「软件 / 脚本 / 目录」条目池，每条目按会话授权（无全局授权层）；按 CPU / GPU / 内存空闲情况门控启动本地 AI 软件与脚本（ComfyUI / LM Studio / NInfer / 任意程序）。",
+  "description": "本地授权：统一管理「软件 / 脚本 / 目录」条目池，每条目按会话或工作区授权（授权工作区＝其下所有会话默认可用；无全局授权层）；按 CPU / GPU / 内存空闲情况门控启动本地 AI 软件与脚本（ComfyUI / LM Studio / NInfer / 任意程序）。",
   "engines": {
     "node": ">=22"
   },
