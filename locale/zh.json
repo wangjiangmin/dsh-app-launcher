@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "本地授权",
-    "description": "按资源空闲情况授权并启动本地 AI 软件与脚本：先查 CPU / GPU / 内存，空闲才允许拉起 ComfyUI、LM Studio、NInfer 或你配置的任意程序；配置一次后 Agent 无需二次授权。"
+    "description": "统一管理本地「软件/脚本/目录」条目，每个条目按会话授权：只有被授权的会话能看到并使用它。启动前查 CPU / GPU / 内存，空闲才允许拉起 ComfyUI、LM Studio、NInfer 或你配置的任意程序与脚本。"
   }
 }

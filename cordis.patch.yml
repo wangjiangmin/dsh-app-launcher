@@ -22,9 +22,9 @@
         unreadableGpuPolicy: reject
         # 同族互斥：一次只允许一个 GPU 重活运行；冲突时只拒绝并给建议，绝不杀别人的进程。
         conflictPolicy: reject
-        # 全局授权目录（可选兜底，所有程序共享）。
-        # 正常应在每个程序自己的 allowedDirs 里配（跟着软件走），这里留空即可。
-        allowedDirs: []
+        # 条目池版本：2 = 统一「软件/脚本/目录」条目 + 每条目会话授权。
+        # 全局授权层已废除：目录也是条目，授权给会话后才对该会话可见。
+        poolVersion: 2
         programs:
           # ComfyUI Desktop：可以正常启动。
           #
@@ -36,6 +36,9 @@
           # 插件现在在 spawn 前剔除该变量，实测可正常拉起（后端 ~10s 就绪）。
           - id: comfyui
             name: ComfyUI
+            kind: program
+            # 出厂不预授权任何会话：由用户在设置页「授权」里勾选（收缩权限）。
+            sessions: []
             enabled: true
             description: 图像/视频生成底座（Qwen-Image / WAN / MiniMax H3）。启动后监听 8188，冷启动约 1–2 分钟。
             launch:
@@ -65,6 +68,8 @@
 
           - id: lm-studio
             name: LM Studio
+            kind: program
+            sessions: []
             enabled: true
             description: 本地 LLM 推理服务（OpenAI 兼容 http://127.0.0.1:1234/v1）
             launch:
@@ -89,6 +94,8 @@
 
           - id: ninfer
             name: NInfer 引擎
+            kind: program
+            sessions: []
             enabled: true
             description: 本地 LLM 推理引擎（OpenAI 兼容 http://127.0.0.1:8094/v1）
             launch:
@@ -142,6 +149,8 @@
           # exclusive 留空：它不占用互斥组，避免和 LM Studio/ComfyUI 互相卡死。
           - id: blender
             name: Blender
+            kind: program
+            sessions: []
             enabled: true
             description: 3D 建模 / 渲染（Steam 安装的 Blender 5.2）。GPU 渲染会吃满显存，启动前请确认没有别的重活在跑。
             launch:

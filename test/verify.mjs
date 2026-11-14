@@ -16,6 +16,8 @@ import {
   isAbsolutePath,
   isPathAllowed,
   effectiveAllowedDirs,
+  inferScriptInterpreter,
+  normalizeSessions,
 } from '../lib/config.mjs'
 import {
   evaluateResourceGate,
@@ -39,6 +41,7 @@ import {
   buildCommand,
   describeCommand,
   processNameOf,
+  detectProcessName,
   probeReady,
   listeningPids,
   createRegistry,
@@ -58,6 +61,8 @@ import {
   deriveId,
   splitArgs,
   parseEnvText,
+  toFormProgram,
+  fromFormProgram,
 } from '../lib/edit.mjs'
 import { createConfigStore } from '../lib/store.mjs'
 import { listAllowedDirectory, assertLaunchPathAllowed, parentOf } from '../lib/browse.mjs'
@@ -984,9 +989,9 @@ await test('app_start 门控拒绝返回 ok:false', async () => {  const registe
   const ctx = { tools: { register: (d) => (registered.push(d), () => {}) } }
   const dir = tempDir()
   const { deps } = makeFakeEnv({ gpu: { utilPct: 88, usedMiB: 14000, totalMiB: 16303, freeMiB: 2303 } })
-  const runtime = makeRuntime({ sampleCacheMs: 0, programs: [{ id: 'a', launch: { exe: 'C:/a.exe' }, needs: { gpuUtilPctMax: 10 } }] }, deps, dir)
+  const runtime = makeRuntime({ sampleCacheMs: 0, programs: [{ id: 'a', launch: { exe: 'C:/a.exe' }, needs: { gpuUtilPctMax: 10 }, sessions: ['test-session'] }] }, deps, dir)
   registerLauncherTools(ctx, runtime)
-  const value = await registered.find((d) => d.name === 'app_start').execute({ id: 'a' }, {})
+  const value = await registered.find((d) => d.name === 'app_start').execute({ id: 'a' }, { agent: { id: 'test-session' } })
   assert.equal(value.ok, false)
   assert.match(value.reason, /88%/)
 })
@@ -996,9 +1001,9 @@ await test('app_list 暴露 gate.action', async () => {
   const ctx = { tools: { register: (d) => (registered.push(d), () => {}) } }
   const dir = tempDir()
   const { deps } = makeFakeEnv()
-  const runtime = makeRuntime({ sampleCacheMs: 0, programs: [{ id: 'a', name: 'A', launch: { exe: 'C:/a.exe' }, needs: { gpuUtilPctMax: 10 } }] }, deps, dir)
+  const runtime = makeRuntime({ sampleCacheMs: 0, programs: [{ id: 'a', name: 'A', launch: { exe: 'C:/a.exe' }, needs: { gpuUtilPctMax: 10 }, sessions: ['test-session'] }] }, deps, dir)
   registerLauncherTools(ctx, runtime)
-  const value = await registered.find((d) => d.name === 'app_list').execute({}, {})
+  const value = await registered.find((d) => d.name === 'app_list').execute({ agent: { id: 'test-session' } })
   assert.equal(value.programs[0].gate.action, 'start')
 })
 
@@ -1009,11 +1014,46 @@ await test('app_list 对已在运行给 already-running', async () => {
   const { deps } = makeFakeEnv({ onlineIds: ['a'] })
   const runtime = makeRuntime({
     sampleCacheMs: 0,
-    programs: [{ id: 'a', launch: { exe: 'C:/a.exe' }, needs: { gpuUtilPctMax: 10 }, ready: { url: 'http://127.0.0.1:9100/health' } }],
+    programs: [{ id: 'a', launch: { exe: 'C:/a.exe' }, needs: { gpuUtilPctMax: 10 }, ready: { url: 'http://127.0.0.1:9100/health' }, sessions: ['test-session'] }],
   }, deps, dir)
   registerLauncherTools(ctx, runtime)
-  const value = await registered.find((d) => d.name === 'app_list').execute({}, {})
+  const value = await registered.find((d) => d.name === 'app_list').execute({ agent: { id: 'test-session' } })
   assert.equal(value.programs[0].gate.action, 'already-running')
+})
+
+await test('工具层 fail-closed：拿不到会话身份时什么都看不到', async () => {
+  const registered = []
+  const ctx = { tools: { register: (d) => (registered.push(d), () => {}) } }
+  const dir = tempDir()
+  const { deps } = makeFakeEnv()
+  const runtime = makeRuntime({ sampleCacheMs: 0, programs: [{ id: 'a', launch: { exe: 'C:/a.exe' }, sessions: ['test-session'] }] }, deps, dir)
+  registerLauncherTools(ctx, runtime)
+  const value = await registered.find((d) => d.name === 'app_list').execute({})
+  assert.deepEqual(value.programs, [], '空 exec 不能退化成管理面')
+  assert.deepEqual(value.directories, [])
+  // app_start 对未授权/未知程序直接抛错（_requireProgram），不静默放行
+  await assert.rejects(
+    () => registered.find((d) => d.name === 'app_start').execute({ id: 'a' }, {}),
+    /未知程序/,
+  )
+})
+
+await test('app_list 附带本会话已授权的目录条目', async () => {
+  const registered = []
+  const ctx = { tools: { register: (d) => (registered.push(d), () => {}) } }
+  const dir = tempDir()
+  const { deps } = makeFakeEnv()
+  const runtime = makeRuntime({
+    sampleCacheMs: 0,
+    programs: [
+      { id: 'a', launch: { exe: 'C:/a.exe' }, sessions: ['test-session'] },
+      { id: 'models', name: '模型', kind: 'directory', path: 'H:\\models', sessions: ['test-session'] },
+      { id: 'private', name: '私有', kind: 'directory', path: 'H:\\private', sessions: ['other-session'] },
+    ],
+  }, deps, dir)
+  registerLauncherTools(ctx, runtime)
+  const value = await registered.find((d) => d.name === 'app_list').execute({ agent: { id: 'test-session' } })
+  assert.deepEqual(value.directories.map((d) => d.path), ['H:\\models'])
 })
 
 await test('HTTP 门面必须覆盖 http.mjs 用到的每个成员（新增路由要同步 index.js）', async () => {
@@ -1208,17 +1248,20 @@ await test('assertLaunchPathAllowed 拦白名单外路径', () => {
   assert.doesNotThrow(() => assertLaunchPathAllowed('C:\\Apps\\app.exe', ['C:\\Apps']))
 })
 
-await test('updateGlobal 接受 allowedDirs 并拒绝相对路径', () => {
-  assert.throws(() => updateGlobal({}, { allowedDirs: ['C:\\Apps', 'rel'] }), /绝对路径/)
-  assert.throws(() => updateGlobal({}, { allowedDirs: 'not-array' }), /数组/)
-  assert.deepEqual(updateGlobal({}, { allowedDirs: ['C:\\Apps', 'C:\\Apps\\', 'c:/apps'] }).allowedDirs, ['C:\\Apps'])
+await test('updateGlobal 拒绝 allowedDirs（全局授权已废除）', () => {
+  assert.throws(() => updateGlobal({}, { allowedDirs: ['C:\\Apps'] }), /全局授权目录已废除/)
+  assert.throws(() => updateGlobal({}, { allowedDirs: [] }), /全局授权目录已废除/)
+  // 其余全局设置仍正常
+  assert.equal(updateGlobal({}, { conflictPolicy: 'stop-own' }).conflictPolicy, 'stop-own')
 })
 
 section('每程序授权目录')
 
-await test('effectiveAllowedDirs = 程序自己的 ∪ 全局兜底', () => {
+await test('effectiveAllowedDirs 只含程序自己的目录（不再合并全局）', () => {
   const dirs = effectiveAllowedDirs({ allowedDirs: ['C:\\Shared'] }, { allowedDirs: ['F:\\Models', 'C:\\Shared'] })
   assert.deepEqual(dirs, ['F:\\Models', 'C:\\Shared'])
+  // 全局兜底不再生效：程序没配就是空
+  assert.deepEqual(effectiveAllowedDirs({ allowedDirs: ['C:\\Shared'] }, { allowedDirs: [] }), [])
 })
 
 await test('不同程序互不共享授权目录', () => {
@@ -1438,6 +1481,110 @@ await test('browse 按程序授权范围（不串到别的程序）', async () =
     programs: [{ id: 'blender', launch: { exe: 'C:/b.exe' }, allowedDirs: [other] }],
   }, deps, dir2)
   await assert.rejects(() => runtime2.browse(ownDir, 'blender'), (e) => e.code === 'not-allowed')
+})
+
+// ---------- poolVersion 2：条目类型 / 脚本 / 会话授权 ----------
+
+await test('normalizeProgram 默认 kind=program、sessions=[]', () => {
+  const p = normalizeProgram({ name: 'A', launch: { exe: 'C:/a.exe' } }, 0)
+  assert.equal(p.kind, 'program')
+  assert.deepEqual(p.sessions, [])
+})
+
+await test('normalizeSessions 去空去重 trim、非数组返空', () => {
+  assert.deepEqual(normalizeSessions(['s1', ' s1 ', '', 's2', null, 's2']), ['s1', 's2'])
+  assert.deepEqual(normalizeSessions('not-array'), [])
+  assert.deepEqual(normalizeSessions(undefined), [])
+})
+
+await test('normalizeProgram directory：绝对路径 valid 且 launchable=false', () => {
+  const ok = normalizeProgram({ name: '模型', kind: 'directory', path: 'H:\\models' }, 0)
+  assert.equal(ok.valid, true)
+  assert.equal(ok.launchable, false)
+  assert.equal(ok.path, 'H:\\models')
+  const bad = normalizeProgram({ name: '模型', kind: 'directory', path: 'relative/dir' }, 0)
+  assert.equal(bad.valid, false)
+  const missing = normalizeProgram({ name: '模型', kind: 'directory' }, 0)
+  assert.equal(missing.valid, false)
+})
+
+await test('inferScriptInterpreter 按扩展名推导，未知返 null', () => {
+  assert.equal(inferScriptInterpreter('C:/x/run.ps1').exe, 'powershell.exe')
+  assert.deepEqual(inferScriptInterpreter('C:/x/run.ps1').args, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'])
+  assert.equal(inferScriptInterpreter('C:/x/run.bat').shell, true)
+  assert.equal(inferScriptInterpreter('C:/x/run.py').exe, 'python.exe')
+  assert.equal(inferScriptInterpreter('C:/x/run.mjs').exe, 'node.exe')
+  assert.equal(inferScriptInterpreter('C:/x/run.jar').exe, 'java.exe')
+  assert.equal(inferScriptInterpreter('C:/x/run.unknown'), null)
+  assert.equal(inferScriptInterpreter('noext'), null)
+})
+
+await test('validateProgram directory 要绝对路径', () => {
+  assert.throws(() => validateProgram({ name: 'D', kind: 'directory', path: '' }), /目录路径/)
+  assert.throws(() => validateProgram({ name: 'D', kind: 'directory', path: 'rel/x' }), /绝对路径/)
+  const ok = validateProgram({ name: 'D', kind: 'directory', path: 'F:\\data' })
+  assert.equal(ok.kind, 'directory')
+})
+
+await test('validateProgram script：未知扩展名且无解释器被拒，显式解释器放行', () => {
+  assert.throws(() => validateProgram({ name: 'S', kind: 'script', launch: { exe: 'C:/x/run.unknown' } }), /无法识别脚本类型/)
+  const ok = validateProgram({ name: 'S', kind: 'script', launch: { exe: 'C:/x/run.unknown', interpreter: 'C:/tools/runner.exe' } })
+  assert.equal(ok.kind, 'script')
+  assert.throws(() => validateProgram({ name: 'S', kind: 'script', launch: {} }), /脚本路径/)
+})
+
+await test('validateProgram 拒绝非法 kind 与非数组 sessions', () => {
+  assert.throws(() => validateProgram({ name: 'A', kind: 'weird', launch: { exe: 'C:/a.exe' } }), /program \/ script \/ directory/)
+  assert.throws(() => validateProgram({ name: 'A', launch: { exe: 'C:/a.exe' }, sessions: 's1' }), /会话 id 数组/)
+})
+
+await test('buildCommand script：.ps1 交给 powershell -File', () => {
+  const cmd = buildCommand({ kind: 'script', launch: { exe: 'C:/x/run.ps1', args: ['-v'] } })
+  assert.equal(cmd.exe, 'powershell.exe')
+  assert.deepEqual(cmd.argv, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:/x/run.ps1', '-v'])
+  assert.equal(cmd.shell, false)
+})
+
+await test('buildCommand script：.bat 走 shell，显式解释器优先', () => {
+  const bat = buildCommand({ kind: 'script', launch: { exe: 'C:/x/run.bat', args: ['a'] } })
+  assert.equal(bat.shell, true)
+  assert.equal(bat.exe, 'C:/x/run.bat')
+  const explicit = buildCommand({ kind: 'script', launch: { exe: 'C:/x/run.py', interpreter: 'C:/py/python.exe', args: ['a'] } })
+  assert.equal(explicit.exe, 'C:/py/python.exe')
+  assert.deepEqual(explicit.argv, ['C:/x/run.py', 'a'])
+})
+
+await test('buildCommand program 不受脚本逻辑影响', () => {
+  const cmd = buildCommand({ kind: 'program', launch: { exe: 'C:/a.exe', args: ['--x'] } })
+  assert.equal(cmd.exe, 'C:/a.exe')
+  assert.deepEqual(cmd.argv, ['--x'])
+  assert.equal(cmd.shell, false)
+})
+
+await test('detectProcessName：脚本看解释器，.bat 返空', () => {
+  assert.equal(detectProcessName({ kind: 'script', launch: { exe: 'C:/x/run.py' } }), 'python')
+  assert.equal(detectProcessName({ kind: 'script', launch: { exe: 'C:/x/run.bat' } }), '')
+  assert.equal(detectProcessName({ kind: 'script', launch: { exe: 'C:/x/run.py', interpreter: 'C:/py/python.exe' } }), 'python')
+  assert.equal(detectProcessName({ kind: 'program', launch: { exe: 'C:/apps/blender.exe' } }), 'blender')
+})
+
+await test('resolveConfig poolVersion：缺省 1，显式 2 保留', () => {
+  assert.equal(resolveConfig({ programs: [] }).poolVersion, 1)
+  assert.equal(resolveConfig({ poolVersion: 2, programs: [] }).poolVersion, 2)
+})
+
+await test('toFormProgram/fromFormProgram 往返保留 kind/sessions/path/interpreter', () => {
+  const dir = normalizeProgram({ name: '模型', kind: 'directory', path: 'H:\\models', sessions: ['s1'] }, 0)
+  const dirBack = fromFormProgram(toFormProgram(dir))
+  assert.equal(dirBack.kind, 'directory')
+  assert.equal(dirBack.path, 'H:\\models')
+  assert.deepEqual(dirBack.sessions, ['s1'])
+
+  const script = normalizeProgram({ name: 'S', kind: 'script', launch: { exe: 'C:/x/run.py', interpreter: 'C:/py/python.exe' }, sessions: ['s2'] }, 0)
+  const scriptBack = fromFormProgram(toFormProgram(script))
+  assert.equal(scriptBack.kind, 'script')
+  assert.equal(scriptBack.launch.interpreter, 'C:/py/python.exe')
+  assert.deepEqual(scriptBack.sessions, ['s2'])
 })
 
 // ---------- HTTP 同源 ----------

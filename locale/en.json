@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Local Authorization",
-    "description": "Grants and starts local AI software and scripts by resource availability: checks CPU / GPU / RAM first, then launches ComfyUI, LM Studio, NInfer or any program you configure only when the machine is idle. Configure once and the Agent needs no second approval."
+    "description": "Manages local software / script / directory entries in one pool, each authorized per session: only authorized sessions can see and use an entry. Checks CPU / GPU / RAM before launching ComfyUI, LM Studio, NInfer or any program/script you configure, and only starts when the machine is idle."
   }
 }

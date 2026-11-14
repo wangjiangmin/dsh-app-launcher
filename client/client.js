@@ -4,20 +4,29 @@
  * 手写客户端插件：`window.__ModuleLoader__.load({id, factory})`，factory 里
  * `require('react')`，最后 return `{ name, inject, apply }`。没有构建步骤。
  *
- * 布局原则（修复横向溢出）：**一行一个应用卡片，字段竖向排列**，
+ * 布局原则（修复横向溢出）：**一行一个条目卡片，字段竖向排列**，
  * 不把「名称 / 路径 / 需求 / 状态 / 操作」塞进同一行 grid。
- * 编辑用内联展开的表单，不弹模态框，避免窄面板里弹窗被裁切。
+ * 编辑/新建/授权都用弹框（Modal + ErrorBoundary），避免窄面板里内联表单被挤没。
+ *
+ * 权限模型（poolVersion 2）：统一条目池「软件/脚本/目录」，每个条目带
+ * sessions[] 会话授权；没有全局授权层。设置页是管理面（看全部条目），
+ * Agent 工具只能看到授权给自己会话的条目。
  *
  * 接口：
  *   GET    /dsh-app-launcher/status
  *   GET    /dsh-app-launcher/config
+ *   GET    /dsh-app-launcher/sessions          会话选择器数据源
  *   POST   /dsh-app-launcher/config/global     { patch: {...} }
  *   POST   /dsh-app-launcher/config/program    { entry }
  *   PATCH  /dsh-app-launcher/config/program    { id, entry }
  *   DELETE /dsh-app-launcher/config/program    { id }
+ *   POST   /dsh-app-launcher/config/entry-sessions { id, sessions }
  *   POST   /dsh-app-launcher/config/reset
+ *   GET    /dsh-app-launcher/grants
  *   POST   /dsh-app-launcher/start             { id }
  *   POST   /dsh-app-launcher/stop              { id }
+ *   GET    /dsh-app-launcher/verify?id=
+ *   GET    /dsh-app-launcher/log?id=
  */
 window.__ModuleLoader__.load({
   id: 'dsh-app-launcher',
@@ -30,9 +39,9 @@ window.__ModuleLoader__.load({
 
     // ==================== 文案 ====================
     const zh = {
-      nav: '本地应用',
-      title: '本地应用启动器',
-      subtitle: '按 CPU / GPU / 内存空闲情况按需拉起本地软件；Agent 无需二次授权即可启动',
+      nav: '本地授权',
+      title: '软件 / 脚本 / 目录',
+      subtitle: '统一管理本地软件、脚本与目录；每个条目按会话授权，只有被授权的会话才能看到并使用',
       globalOn: '插件已启用',
       globalOff: '插件已禁用',
       globalTipOn: 'Agent 可以直接调用 app_list / app_start；切换后旧会话立刻生效',
@@ -43,10 +52,10 @@ window.__ModuleLoader__.load({
       testTip: '手动检查一次 CPU / GPU / 内存（进入页面时不做检查，避免卡顿）',
       notCheckedYet: '资源未检查',
       lazyTip: '进入页面不自动检查，点「测试」或启动程序时才查',
-      sec_programs: '应用列表',
+      sec_programs: '软件/脚本/目录',
       sec_advanced: '高级设置',
-      empty: '还没有任何应用，点「添加应用」开始配置',
-      addApp: '授权',
+      empty: '还没有条目，点上方按钮添加软件、脚本或目录',
+      addApp: '添加条目',
       edit: '编辑',
       del: '删除',
       save: '保存',
@@ -147,17 +156,18 @@ window.__ModuleLoader__.load({
       useThisPath: '用这个路径',
       notExecutable: '这个条目不是可执行脚本（exe/bat/cmd/ps1/py…），请进入目录或手动填写',
       manualTip: '找不到？可直接粘贴完整路径',
-      needAllowedDir: '还没有授权任何目录。请到本页底部「授权目录」添加要浏览的文件夹（只授权这几个文件夹，不是整盘）。',
+      needAllowedDir: '还没有可浏览的目录。请先添加「目录」条目并授权给相应会话（只授权需要的文件夹，不是整盘）。',
       sec_allowed: '授权目录',
       close: '关闭',
-      addProgram: '添加软件/脚本',
+      addProgram: '添加软件',
+      addScript: '添加脚本',
+      addDirectory: '添加目录',
       addDir: '添加目录',
       dirAdded: '目录已加入本作用域',
       dirRemoved: '目录已移除',
       programAdded: '程序已加入本作用域',
       programRemoved: '程序已移除',
       sec_dirs: '授权目录',
-      sec_programs: '软件/脚本',
       sec_grants: '授权记录',
       noPrograms: '本作用域还没有添加软件/脚本',
       noGrants: '还没有授权记录',
@@ -179,30 +189,56 @@ window.__ModuleLoader__.load({
       navAuth: '授权',
       globalScopeTip: '对所有工作区、所有会话生效',
       workspaceScopeTip: '只对这个工作区下的所有会话生效',
-      sessionScopeTip: '只在当前会话生效',
+      sessionScopeTip: '管理授权给本会话的条目；勾选立即生效',
       openPanel: '打开设置',
       workspaceUnavailable: '当前没有活动工作区，无法设置工作区级授权',
       jsonErr: '返回数据不是有效 JSON',
       belongsToWorkspace: '所属工作区',
       workspaceUnresolved: '未能确定所属工作区（工作区级授权此时不参与合并）',
       allowedTip: '「选择文件」只能浏览这里列出的目录。留空则无法浏览，但可以手动填路径。',
-      addDir: '添加目录',
       dirPlaceholder: 'C:\\Users\\wjm\\AppData\\Local\\Programs',
       removeDir: '移除',
       noDirs: '还没有授权目录',
       saveDirs: '保存授权目录',
       dirsSaved: '授权目录已保存',
-      notExecutable: '这个条目不是可执行脚本，请进入目录或手动填写',
       notDirectory: '这个条目不是目录',
-      dirEmpty: '（空目录）',
-      useThisDir: '用这个目录',
       browseTitle: '选择位置',
+      // —— 统一条目池 + 会话授权（poolVersion 2）——
+      kind_program: '软件',
+      kind_script: '脚本',
+      kind_directory: '目录',
+      f_kind: '条目类型',
+      f_scriptPath: '脚本路径',
+      f_scriptPathTip: '脚本文件的完整路径（.ps1 / .bat / .cmd / .py / .js / .sh 等）；保存时按扩展名自动选择解释器',
+      f_interpreter: '解释器（可选）',
+      f_interpreterTip: '留空 = 按扩展名自动选择；填写则强制用指定解释器（完整路径，或 PATH 里能找到的名字）',
+      authBtn: '授权',
+      authTitle: '会话授权',
+      authTip: '只有勾选的会话能看到并使用这个条目；未勾选的会话完全看不到它',
+      sessionsNone: '未授权任何会话',
+      sessionsCount: '已授权 {n} 个会话',
+      sessionsLoading: '正在加载会话列表…',
+      sessionsEmpty: '没有可选的会话',
+      sessionsFail: '会话列表加载失败',
+      searchSessions: '搜索会话标题或 id…',
+      untitledSession: '（无标题）',
+      liveBadge: '进行中',
+      subagentBadge: '子代理',
+      saveAuth: '保存授权',
+      authSaved: '授权已更新，立即生效',
+      unauthNotice: '有 {n} 个条目未授权任何会话——它们对所有会话都不可见。点卡片上的「授权」选择会话',
+      migrationPending: '旧的工作区授权正在等待展开：工作区列表就绪后会自动转成会话授权',
+      thisSessionAuth: '本会话授权',
+      thisSessionTip: '勾选条目即授权给本会话；改动立即生效，无需重启',
+      noEntries: '还没有条目，请先到设置页「本地授权」添加',
+      grantEntry: '条目',
+      noSessionId: '拿不到会话 id，无法做会话授权',
     }
 
     const en = {
-      nav: 'Local apps',
-      title: 'Local App Launcher',
-      subtitle: 'Launches local software only when CPU / GPU / RAM are idle; the Agent needs no second approval',
+      nav: 'Local authorization',
+      title: 'Software / Scripts / Directories',
+      subtitle: 'Unified management of local software, scripts and directories; each entry is authorized per session — only authorized sessions can see and use it',
       globalOn: 'Plugin enabled',
       globalOff: 'Plugin disabled',
       globalTipOn: 'The Agent can call app_list / app_start; existing sessions pick this up immediately',
@@ -213,10 +249,10 @@ window.__ModuleLoader__.load({
       testTip: 'Run a one-off CPU / GPU / RAM check (opening this page does not sample, to stay fast)',
       notCheckedYet: 'Resources not checked',
       lazyTip: 'Not checked on open — hit Test, or start an app',
-      sec_programs: 'Applications',
+      sec_programs: 'Software / scripts / directories',
       sec_advanced: 'Advanced',
-      empty: 'No applications yet — click "Add application"',
-      addApp: 'Authorize',
+      empty: 'No entries yet — add software, scripts or directories above',
+      addApp: 'Add entry',
       edit: 'Edit',
       del: 'Delete',
       save: 'Save',
@@ -316,17 +352,18 @@ window.__ModuleLoader__.load({
       useThisPath: 'Use this path',
       notExecutable: 'That entry is not an executable script (exe/bat/cmd/ps1/py…); enter a folder or type the path',
       manualTip: 'Cannot find it? Paste the full path directly',
-      needAllowedDir: 'No authorized directories yet. Add the folders you want to browse under "Authorized directories" below (only those folders, not the whole drive).',
+      needAllowedDir: 'No browsable directories yet. Add "directory" entries and authorize them to sessions first (only the folders you need, never a whole drive).',
       sec_allowed: 'Authorized directories',
       close: 'Close',
-      addProgram: 'Add app/script',
+      addProgram: 'Add software',
+      addScript: 'Add script',
+      addDirectory: 'Add directory',
       addDir: 'Add directory',
       dirAdded: 'Directory added to this scope',
       dirRemoved: 'Directory removed',
       programAdded: 'App added to this scope',
       programRemoved: 'App removed',
       sec_dirs: 'Authorized directories',
-      sec_programs: 'Apps / scripts',
       sec_grants: 'Grant log',
       noPrograms: 'No apps in this scope yet',
       noGrants: 'No grants recorded yet',
@@ -348,24 +385,50 @@ window.__ModuleLoader__.load({
       navAuth: 'Authorize',
       globalScopeTip: 'Applies to every workspace and session',
       workspaceScopeTip: 'Applies to every session in this workspace',
-      sessionScopeTip: 'Applies to this session only',
+      sessionScopeTip: 'Manage entries authorized to this session; changes apply immediately',
       openPanel: 'Open settings',
       workspaceUnavailable: 'No active workspace, so workspace-level grants are unavailable',
       jsonErr: 'Response was not valid JSON',
       belongsToWorkspace: 'Workspace',
       workspaceUnresolved: 'Workspace could not be resolved (workspace-level grants are not merged)',
       allowedTip: '"Browse" can only see the folders listed here. Empty means browsing is unavailable, but you can still type a path.',
-      addDir: 'Add directory',
       dirPlaceholder: 'C:\\Users\\wjm\\AppData\\Local\\Programs',
       removeDir: 'Remove',
       noDirs: 'No authorized directories yet',
       saveDirs: 'Save authorized directories',
       dirsSaved: 'Authorized directories saved',
-      notExecutable: 'That entry is not an executable script — enter a folder or type the path',
       notDirectory: 'That entry is not a directory',
-      dirEmpty: '(empty directory)',
-      useThisDir: 'Use this directory',
       browseTitle: 'Choose a location',
+      // —— Unified entry pool + per-session authorization (poolVersion 2) ——
+      kind_program: 'Software',
+      kind_script: 'Script',
+      kind_directory: 'Directory',
+      f_kind: 'Entry type',
+      f_scriptPath: 'Script path',
+      f_scriptPathTip: 'Full path to the script (.ps1 / .bat / .cmd / .py / .js / .sh …); the interpreter is inferred from the extension on save',
+      f_interpreter: 'Interpreter (optional)',
+      f_interpreterTip: 'Blank = inferred from the extension; set to force a specific interpreter (full path, or a name on PATH)',
+      authBtn: 'Authorize',
+      authTitle: 'Session authorization',
+      authTip: 'Only checked sessions can see and use this entry; unchecked sessions cannot see it at all',
+      sessionsNone: 'Not authorized to any session',
+      sessionsCount: '{n} session(s) authorized',
+      sessionsLoading: 'Loading sessions…',
+      sessionsEmpty: 'No sessions available',
+      sessionsFail: 'Failed to load sessions',
+      searchSessions: 'Search by title or id…',
+      untitledSession: '(untitled)',
+      liveBadge: 'live',
+      subagentBadge: 'subagent',
+      saveAuth: 'Save authorization',
+      authSaved: 'Authorization updated — effective immediately',
+      unauthNotice: '{n} entries are not authorized to any session — invisible to every session. Use "Authorize" on a card to pick sessions',
+      migrationPending: 'Legacy workspace grants are pending expansion into session grants once the workspace list is available',
+      thisSessionAuth: 'Grants for this session',
+      thisSessionTip: 'Check an entry to authorize it to this session; changes apply immediately, no restart',
+      noEntries: 'No entries yet — add them in Settings → Local authorization first',
+      grantEntry: 'Entry',
+      noSessionId: 'No session id available for authorization',
     }
 
     // ==================== 样式 ====================
@@ -675,7 +738,7 @@ window.__ModuleLoader__.load({
     }
 
     // ==================== 应用卡片 ====================
-    function AppCard({ program, logInfo, gate, editing, onEdit, onDelete, onStart, onStop, onVerify, verifyResult, busy, confirmStop, setConfirmStop, t }) {
+    function AppCard({ program, logInfo, gate, editing, onEdit, onDelete, onStart, onStop, onVerify, onAuth, verifyResult, busy, confirmStop, setConfirmStop, t }) {
       const phase = PHASE[program.phase] ?? { key: 'phase_unknown', tone: 'muted' }
       const gateRunning = gate?.action === 'already-running'
       const gateOk = gate?.ok === true && !gateRunning
@@ -686,7 +749,10 @@ window.__ModuleLoader__.load({
         !gateRunning && gateOk && program.phase !== 'ready' && !busy
       const canStop = program.canStop && program.phase !== 'stopped'
 
-      const pills = [h(Pill, { key: 'p', tone: phase.tone }, t(phase.key))]
+      const pills = [
+        h(Pill, { key: 'k', tone: 'muted' }, t(program.kind === 'script' ? 'kind_script' : 'kind_program')),
+        h(Pill, { key: 'p', tone: phase.tone }, t(phase.key)),
+      ]
       if (!program.enabled) pills.push(h(Pill, { key: 'd', tone: 'muted' }, t('disabled')))
       if (!program.valid) pills.push(h(Pill, { key: 'i', tone: 'error', title: program.invalidReason ?? '' }, t('invalid')))
       if (manualOnly) pills.push(h(Pill, { key: 'm', tone: 'warn', title: program.launchHint ?? '' }, t('manualOnly')))
@@ -694,6 +760,11 @@ window.__ModuleLoader__.load({
       else if (program.enabled && program.valid) {
         pills.push(h(Pill, { key: 'g', tone: gateOk ? 'success' : 'warn', title: gate?.reason ?? '' }, gateOk ? t('gate_ok') : t('gate_block')))
       }
+      // 会话授权概览：0 个会话＝对所有会话不可见，必须醒目提示
+      const sessions = program.sessions ?? []
+      pills.push(sessions.length === 0
+        ? h(Pill, { key: 's', tone: 'warn', title: t('authTip') }, t('sessionsNone'))
+        : h(Pill, { key: 's', tone: 'brand', title: sessions.join('\n') }, t('sessionsCount').replace('{n}', sessions.length)))
 
       return h('div', { style: S.appCard },
         h('div', { style: S.appTop },
@@ -720,6 +791,7 @@ window.__ModuleLoader__.load({
               title: t('verifyHint'),
               onClick: () => onVerify(program.id),
             }, busy === `${program.id}:verify` ? `${t('verify')}…` : t('verify')),
+            h('button', { style: S.btn, title: t('authTip'), onClick: () => onAuth(program.id) }, t('authBtn')),
             h('button', { style: S.btn, onClick: () => onEdit(editing ? null : program.id) }, editing ? t('cancel') : t('edit')),
             h('button', { style: S.btnDanger, onClick: () => onDelete(program.id) }, t('del'))),
         ),
@@ -755,11 +827,36 @@ window.__ModuleLoader__.load({
           : null)
     }
 
+    // ==================== 目录条目卡片 ====================
+    /** 目录条目：没有启动/停止/验证，只有路径 + 会话授权 + 编辑/删除。 */
+    function DirectoryCard({ entry, t, editing, onEdit, onDelete, onAuth }) {
+      const sessions = entry.sessions ?? []
+      return h('div', { style: S.appCard },
+        h('div', { style: S.appTop },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: '1 1 180px' } },
+            h('div', { style: S.appName }, entry.name || entry.id),
+            entry.description ? h('div', { style: S.appDesc }, entry.description) : null),
+          h('div', { style: S.actions },
+            h('button', { style: S.btn, title: t('authTip'), onClick: () => onAuth(entry.id) }, t('authBtn')),
+            h('button', { style: S.btn, onClick: () => onEdit(editing ? null : entry.id) }, editing ? t('cancel') : t('edit')),
+            h('button', { style: S.btnDanger, onClick: () => onDelete(entry.id) }, t('del')))),
+        h('div', { style: S.pathLine, title: entry.path ?? '' }, entry.path ?? '—'),
+        h('div', { style: S.pills },
+          h(Pill, { tone: 'muted' }, t('kind_directory')),
+          entry.enabled === false ? h(Pill, { tone: 'muted' }, t('disabled')) : null,
+          sessions.length === 0
+            ? h(Pill, { tone: 'warn', title: t('authTip') }, t('sessionsNone'))
+            : h(Pill, { tone: 'brand', title: sessions.join('\n') }, t('sessionsCount').replace('{n}', sessions.length))))
+    }
+
     // ==================== 编辑表单 ====================
     function emptyForm() {
       return {
+        kind: 'program',
         id: '', name: '', enabled: true, description: '',
-        exe: '', args: '', cwd: '', envText: '',
+        sessions: [],
+        path: '',
+        exe: '', args: '', cwd: '', envText: '', interpreter: '',
         allowedDirs: [],
         launchable: true,
         launchHint: '',
@@ -771,14 +868,18 @@ window.__ModuleLoader__.load({
 
     function toForm(program) {
       return {
+        kind: program.kind ?? 'program',
         id: program.id,
         name: program.name,
         enabled: program.enabled,
         description: program.description ?? '',
+        sessions: (program.sessions ?? []).slice(),
+        path: program.path ?? '',
         exe: program.launch?.exe ?? '',
         args: (program.launch?.args ?? []).join(' '),
         cwd: program.launch?.cwd ?? '',
         envText: Object.entries(program.launch?.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+        interpreter: program.launch?.interpreter ?? '',
         allowedDirs: (program.allowedDirs ?? []).slice(),
         launchable: program.launchable !== false,
         launchHint: program.launchHint ?? '',
@@ -791,7 +892,7 @@ window.__ModuleLoader__.load({
         exclusive: program.exclusive ?? '',
         readyUrl: program.ready?.url ?? '',
         readyTimeoutMs: program.ready?.timeoutMs ?? 180000,
-        stopTimeoutMs: 20000,
+        stopTimeoutMs: program.stopTimeoutMs ?? 20000,
       }
     }
 
@@ -800,16 +901,27 @@ window.__ModuleLoader__.load({
      * 的 splitArgs / parseEnvText 解析（客户端不重复实现一遍解析规则）。
      */
     function fromForm(form) {
-      return {
+      const kind = form.kind ?? 'program'
+      const base = {
         id: String(form.id ?? '').trim(),
         name: String(form.name ?? '').trim(),
+        kind,
         enabled: form.enabled !== false,
         description: String(form.description ?? '').trim(),
+        sessions: (form.sessions ?? []).slice(),
+      }
+      // 目录条目只有路径，没有启动参数
+      if (kind === 'directory') {
+        return { ...base, path: String(form.path ?? '').trim() }
+      }
+      return {
+        ...base,
         launch: {
           exe: String(form.exe ?? '').trim(),
           args: String(form.args ?? '').trim(),
           cwd: String(form.cwd ?? '').trim(),
           env: String(form.envText ?? ''),
+          interpreter: String(form.interpreter ?? '').trim(),
         },
         allowedDirs: (form.allowedDirs ?? []).slice(),
         launchable: form.launchable !== false,
@@ -835,6 +947,10 @@ window.__ModuleLoader__.load({
       const set = (patch) => setForm((prev) => ({ ...prev, ...patch }))
       const setNeed = (key, value) => setForm((prev) => ({ ...prev, needs: { ...prev.needs, [key]: value } }))
 
+      const kind = form.kind ?? 'program'
+      const isDir = kind === 'directory'
+      const isScript = kind === 'script'
+
       const addDir = () => {
         const text = dirInput.trim()
         if (text === '') return
@@ -851,7 +967,27 @@ window.__ModuleLoader__.load({
         set({ allowedDirs: (form.allowedDirs ?? []).filter((d) => d !== dir) })
       }
 
+      const kindBtn = (k, labelKey) => h('button', {
+        type: 'button',
+        style: {
+          ...S.btn,
+          ...(kind === k ? {
+            borderColor: 'var(--dsw-alias-brand-primary, var(--color-blue-500))',
+            color: 'var(--dsw-alias-brand-primary, var(--color-blue-500))',
+            fontWeight: 700,
+          } : {}),
+        },
+        onClick: () => set({ kind: k }),
+      }, t(labelKey))
+
       return h('div', { style: S.form },
+        // 条目类型：软件 / 脚本 / 目录（统一管理，字段随类型变化）
+        h(Field, { label: t('f_kind') },
+          h('div', { style: S.rowInline },
+            kindBtn('program', 'kind_program'),
+            kindBtn('script', 'kind_script'),
+            kindBtn('directory', 'kind_directory'))),
+
         h(Field, { label: t('f_name') },
           h(TextInput, { value: form.name, onChange: (v) => set({ name: v }), placeholder: 'ComfyUI' })),
 
@@ -861,11 +997,24 @@ window.__ModuleLoader__.load({
         h(Field, { label: t('f_desc'), hint: t('f_descTip') },
           h(TextArea, { value: form.description, onChange: (v) => set({ description: v }), rows: 2, placeholder: t('f_descTip') })),
 
-        h(Field, { label: t('f_exe'), hint: t('f_exeTip') },
-          h(TextInput, { value: form.exe, onChange: (v) => set({ exe: v }), placeholder: 'C:\\...\\ComfyUI.exe' })),
+        // 目录条目：只有路径；软件/脚本：启动路径（脚本按扩展名推导解释器）
+        isDir
+          ? h(Field, { label: t('f_dirPath'), hint: t('f_dirPathTip') },
+            h(TextInput, { value: form.path, onChange: (v) => set({ path: v }), placeholder: 'D:\\models' }))
+          : h(Field, { label: isScript ? t('f_scriptPath') : t('f_exe'), hint: isScript ? t('f_scriptPathTip') : t('f_exeTip') },
+            h(TextInput, {
+              value: form.exe,
+              onChange: (v) => set({ exe: v }),
+              placeholder: isScript ? 'C:\\...\\task.ps1' : 'C:\\...\\ComfyUI.exe',
+            })),
+
+        isScript
+          ? h(Field, { label: t('f_interpreter'), hint: t('f_interpreterTip') },
+            h(TextInput, { value: form.interpreter, onChange: (v) => set({ interpreter: v }), placeholder: '(留空 = 按扩展名自动)' }))
+          : null,
 
         // 授权目录跟着这个程序走：每个软件只管自己的目录
-        h(Field, { label: t('f_dirs'), hint: t('f_dirsTip') },
+        isDir ? null : h(Field, { label: t('f_dirs'), hint: t('f_dirsTip') },
           (form.allowedDirs ?? []).length === 0
             ? h('div', { style: S.tiny }, t('noDirs'))
             : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
@@ -880,14 +1029,14 @@ window.__ModuleLoader__.load({
               h(TextInput, { value: dirInput, onChange: setDirInput, placeholder: t('dirPlaceholder') })),
             h('button', { style: S.btn, type: 'button', onClick: addDir }, t('addDir')))),
 
-        h(Field, { label: t('f_args'), hint: t('f_argsTip') },
+        isDir ? null : h(Field, { label: t('f_args'), hint: t('f_argsTip') },
           h(TextInput, { value: form.args, onChange: (v) => set({ args: v }), placeholder: '--port 8188' })),
 
-        h(Field, { label: t('f_env'), hint: t('f_envTip') },
+        isDir ? null : h(Field, { label: t('f_env'), hint: t('f_envTip') },
           h(TextArea, { value: form.envText, onChange: (v) => set({ envText: v }), rows: 2, placeholder: 'CUDA_VISIBLE_DEVICES=0' })),
 
         // 启动时的当前目录是少见的高级项：默认折叠，避免用户误以为是"安装目录"
-        h('details', { style: S.details },
+        isDir ? null : h('details', { style: S.details },
           h('summary', { style: S.summary }, t('f_advanced')),
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' } },
             h(Field, { label: t('f_cwd'), hint: t('f_cwdTip') },
@@ -899,29 +1048,35 @@ window.__ModuleLoader__.load({
               h(Field, { label: t('f_readyTimeout') }, h(TextInput, { type: 'number', value: form.readyTimeoutMs, onChange: (v) => set({ readyTimeoutMs: v }) })),
               h(Field, { label: t('f_stopTimeout') }, h(TextInput, { type: 'number', value: form.stopTimeoutMs, onChange: (v) => set({ stopTimeoutMs: v }) }))))),
 
-        h('div', { style: S.divider }),
-        h('div', { style: S.label }, t('f_needs')),
-        h('div', { style: S.tiny }, t('f_needsTip')),
-        h('div', { style: S.twoCol },
-          h(Field, { label: t('f_gpuUtil') }, h(TextInput, { type: 'number', value: form.needs.gpuUtilPctMax, onChange: (v) => setNeed('gpuUtilPctMax', v) })),
-          h(Field, { label: t('f_vram') }, h(TextInput, { type: 'number', value: form.needs.freeVramMiBMin, onChange: (v) => setNeed('freeVramMiBMin', v) })),
-          h(Field, { label: t('f_ram') }, h(TextInput, { type: 'number', value: form.needs.freeRamMiBMin, onChange: (v) => setNeed('freeRamMiBMin', v) })),
-          h(Field, { label: t('f_cpuMax') }, h(TextInput, { type: 'number', value: form.needs.cpuPctMax, onChange: (v) => setNeed('cpuPctMax', v) }))),
+        isDir ? null : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+          h('div', { style: S.divider }),
+          h('div', { style: S.label }, t('f_needs')),
+          h('div', { style: S.tiny }, t('f_needsTip')),
+          h('div', { style: S.twoCol },
+            h(Field, { label: t('f_gpuUtil') }, h(TextInput, { type: 'number', value: form.needs.gpuUtilPctMax, onChange: (v) => setNeed('gpuUtilPctMax', v) })),
+            h(Field, { label: t('f_vram') }, h(TextInput, { type: 'number', value: form.needs.freeVramMiBMin, onChange: (v) => setNeed('freeVramMiBMin', v) })),
+            h(Field, { label: t('f_ram') }, h(TextInput, { type: 'number', value: form.needs.freeRamMiBMin, onChange: (v) => setNeed('freeRamMiBMin', v) })),
+            h(Field, { label: t('f_cpuMax') }, h(TextInput, { type: 'number', value: form.needs.cpuPctMax, onChange: (v) => setNeed('cpuPctMax', v) })))),
 
-        h(Field, { label: t('f_readyUrl'), hint: t('f_readyUrlTip') },
+        isDir ? null : h(Field, { label: t('f_readyUrl'), hint: t('f_readyUrlTip') },
           h(TextInput, { value: form.readyUrl, onChange: (v) => set({ readyUrl: v }), placeholder: 'http://127.0.0.1:8188/system_stats' })),
+
+        // 会话授权：所有类型的条目都有；不勾选任何会话＝对所有会话不可见
+        h('div', { style: S.divider }),
+        h(Field, { label: t('authTitle'), hint: t('authTip') },
+          h(SessionPicker, { selected: form.sessions, onChange: (v) => set({ sessions: v }), t })),
 
         h('div', { style: S.divider }),
         h('div', { style: S.switchRow },
           h(Switch, { checked: form.enabled, onChange: (v) => set({ enabled: v }), label: t('f_enabled') })),
         // 只能手动启动：像 ComfyUI Desktop 这类 Electron 程序，从后台起会静默秒退
-        h('div', { style: S.switchRow },
+        isDir ? null : h('div', { style: S.switchRow },
           h(Switch, {
             checked: form.launchable === false,
             onChange: (v) => set({ launchable: !v }),
             label: t('f_manualOnly'),
           })),
-        form.launchable === false
+        !isDir && form.launchable === false
           ? h(Field, { label: t('f_launchHint'), hint: t('f_launchHintTip') },
             h(TextInput, {
               value: form.launchHint,
@@ -1052,205 +1207,207 @@ window.__ModuleLoader__.load({
       h('div', { style: { padding: '14px 16px', overflow: 'auto' } }, children)))
     }
 
-    // ==================== 作用域授权面板（工作区 / 会话 / 全局通用） ====================
+    // ==================== 会话授权（统一条目池，poolVersion 2） ====================
+
+    /** 会话列表：GET /sessions（宿主 sessionQuery；缺失时降级 workspaceRegistry）。 */
+    function useSessions() {
+      const [state, setState] = React.useState({ loading: true, sessions: [], source: 'none', error: null })
+      const reload = React.useCallback(async () => {
+        setState((prev) => ({ ...prev, loading: true }))
+        try {
+          const res = await jsonFetch('/sessions')
+          if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
+          setState({ loading: false, sessions: res.body.sessions ?? [], source: res.body.source ?? 'none', error: null })
+        } catch (err) {
+          setState({ loading: false, sessions: [], source: 'none', error: err instanceof Error ? err.message : String(err) })
+        }
+      }, [])
+      React.useEffect(() => { reload() }, [reload])
+      return { ...state, reload }
+    }
 
     /**
-     * 一个作用域的面板：列出该层自己的目录与程序，并提供增删。
-     *
-     * 三个入口（设置页 / 会话菜单 / 会话顶部）复用同一个组件，
-     * 只是 `scope` 与 `scopeKey` 不同、可见的层不同。
-     *
-     * `onChanged`：保存成功后通知外层刷新（主列表要跟着变，否则在会话面板
-     * 加的程序在主列表看不到 —— 它们是同一份数据的不同视图）。
+     * 会话多选选择器：搜索 + 勾选列表。
+     * 已选但不在列表里的 id（比如已归档的旧会话）单独列出来，仍可移除。
      */
-    function ScopePanel({ scope, scopeKey, title, subtitle, t, compact, onChanged }) {
-      const [info, setInfo] = React.useState(null)
-      const [slice, setSlice] = React.useState({ allowedDirs: [], programs: [] })
-      const [grants, setGrants] = React.useState([])
+    function SessionPicker({ selected, onChange, t }) {
+      const { sessions, loading, error } = useSessions()
+      const [query, setQuery] = React.useState('')
+      const sel = selected ?? []
+      const toggle = (id) => onChange(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id])
+      const q = query.trim().toLowerCase()
+      const shown = q === '' ? sessions : sessions.filter((s) => `${s.title ?? ''} ${s.id}`.toLowerCase().includes(q))
+      const missing = sel.filter((id) => !sessions.some((s) => s.id === id))
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+        h(TextInput, { value: query, onChange: setQuery, placeholder: t('searchSessions') }),
+        missing.length > 0
+          ? h('div', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+            missing.map((id) => h('span', { key: id, style: { ...S.pill, color: TONES.muted.color, background: TONES.muted.bg, borderColor: TONES.muted.color } },
+              h('span', { style: { overflowWrap: 'anywhere', maxWidth: '220px' } }, id),
+              h('button', {
+                type: 'button',
+                style: { border: 'none', background: 'transparent', cursor: 'pointer', color: 'inherit', font: 'inherit', padding: 0 },
+                onClick: () => toggle(id),
+              }, '✕'))))
+          : null,
+        loading
+          ? h('div', { style: S.tiny }, t('sessionsLoading'))
+          : error
+            ? h('div', { style: S.tinyWarn }, `${t('sessionsFail')}: ${error}`)
+            : shown.length === 0
+              ? h('div', { style: S.tiny }, t('sessionsEmpty'))
+              : h('div', { style: { ...S.browseList, maxHeight: '240px' } },
+                shown.map((s) => {
+                  const checked = sel.includes(s.id)
+                  return h('label', {
+                    key: s.id,
+                    style: {
+                      display: 'flex', gap: '8px', alignItems: 'flex-start',
+                      padding: '4px 6px', cursor: 'pointer', borderRadius: '4px',
+                      background: checked ? 'color-mix(in srgb, var(--dsw-alias-brand-primary, var(--color-blue-500)) 10%, transparent)' : 'transparent',
+                    },
+                  },
+                  h('input', { type: 'checkbox', checked, onChange: () => toggle(s.id), style: { marginTop: '3px' } }),
+                  h('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 } },
+                    h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', overflowWrap: 'anywhere' } },
+                      s.title || t('untitledSession'),
+                      s.live ? h('span', { style: { ...S.tiny, marginLeft: '6px', color: TONES.success.color } }, t('liveBadge')) : null,
+                      s.subagent ? h('span', { style: { ...S.tiny, marginLeft: '6px' } }, t('subagentBadge')) : null),
+                    h('div', { style: { ...S.pathLine, fontSize: '10.5px' } }, s.id)))
+                })))
+    }
+
+    /** 单条目会话授权弹框：只改 sessions，走 /config/entry-sessions 快速通道。 */
+    function SessionAuthDialog({ entry, t, onClose, onSaved }) {
+      const [selected, setSelected] = React.useState(() => (entry.sessions ?? []).slice())
+      const [busy, setBusy] = React.useState(false)
+      const [notice, setNotice] = React.useState(null)
+
+      const save = async () => {
+        setBusy(true)
+        setNotice(null)
+        try {
+          const res = await post('/config/entry-sessions', { id: entry.id, sessions: selected })
+          if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
+          if (typeof onSaved === 'function') {
+            try { await onSaved() } catch { /* 外层刷新失败不影响保存结果 */ }
+          }
+          onClose()
+        } catch (err) {
+          setNotice(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+        h('div', { style: S.tiny }, t('authTip')),
+        h(SessionPicker, { selected, onChange: setSelected, t }),
+        notice ? h('div', { style: noticeTone('error') }, notice) : null,
+        h('div', { style: S.actions },
+          h('button', {
+            style: { ...S.btnPrimary, ...(busy ? S.btnOff : {}) },
+            disabled: busy,
+            onClick: save,
+          }, busy ? '…' : t('saveAuth')),
+          h('button', { style: S.btn, onClick: onClose }, t('cancel'))))
+    }
+
+    /**
+     * 「本会话授权」面板：列出全部条目，每条一个开关。
+     * 会话顶部按钮 / 会话「...」菜单复用；勾选即把该条目授权给这个会话。
+     */
+    function SessionGrantPanel({ sessionId, t }) {
+      const [entries, setEntries] = React.useState(null)
       const [busy, setBusy] = React.useState(null)
       const [notice, setNotice] = React.useState(null)
-      // 弹框状态：null | { kind: 'dir' } | { kind: 'program' }
-      const [dialog, setDialog] = React.useState(null)
+      const sid = String(sessionId ?? '')
 
       const load = React.useCallback(async () => {
         try {
-          const query = `?scope=${encodeURIComponent(scope)}&key=${encodeURIComponent(scopeKey ?? '')}`
-          const res = await jsonFetch(`/scope${query}`)
+          const res = await jsonFetch('/config')
           if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
-          setInfo(res.body.info)
-          setSlice({
-            allowedDirs: res.body.slice?.allowedDirs ?? [],
-            programs: res.body.slice?.programs ?? [],
-          })
-          const g = await jsonFetch('/grants?limit=40')
-          if (g.ok) setGrants(g.body.grants ?? [])
+          setEntries(res.body?.config?.programs ?? [])
         } catch (err) {
-          setNotice({ tone: 'error', text: err instanceof Error ? err.message : String(err) })
+          setNotice(err instanceof Error ? err.message : String(err))
         }
-      }, [scope, scopeKey])
-
+      }, [])
       React.useEffect(() => { load() }, [load])
 
-      const save = async (nextSlice, okText) => {
-        setBusy('save')
+      const toggle = async (entry) => {
+        if (busy) return
+        const has = (entry.sessions ?? []).includes(sid)
+        const next = has ? (entry.sessions ?? []).filter((x) => x !== sid) : [...(entry.sessions ?? []), sid]
+        setBusy(entry.id)
         setNotice(null)
         try {
-          const res = await post('/scope', {
-            scope, key: scopeKey ?? '', slice: nextSlice,
-          })
+          const res = await post('/config/entry-sessions', { id: entry.id, sessions: next })
           if (!res.ok) throw new Error(res.body?.error ?? `HTTP ${res.status}`)
-          setInfo(res.body.info)
-          setSlice(nextSlice)
-          setNotice({ tone: 'success', text: okText ?? t('savedTip') })
-          await load()
-          // 通知外层：主列表 / 状态快照要跟着变（热加载的界面半边）
-          if (typeof onChanged === 'function') {
-            try { await onChanged() } catch { /* 外层刷新失败不影响本面板 */ }
-          }
-          return true
+          setEntries((prev) => (prev ?? []).map((e) => (e.id === entry.id ? { ...e, sessions: next } : e)))
         } catch (err) {
-          setNotice({ tone: 'error', text: err instanceof Error ? err.message : String(err) })
-          return false
+          setNotice(err instanceof Error ? err.message : String(err))
         } finally {
           setBusy(null)
         }
       }
 
-      const addDir = (dir) => save(
-        { ...slice, allowedDirs: [...(slice.allowedDirs ?? []), dir] },
-        t('dirAdded'),
-      )
+      if (sid === '') return h('div', { style: S.tinyWarn }, t('noSessionId'))
 
-      const removeDir = (dir) => save(
-        { ...slice, allowedDirs: (slice.allowedDirs ?? []).filter((d) => d !== dir) },
-        t('dirRemoved'),
-      )
-
-      const addProgram = (entry) => save(
-        { ...slice, programs: [...(slice.programs ?? []), entry] },
-        t('programAdded'),
-      )
-
-      const removeProgram = (id) => save(
-        { ...slice, programs: (slice.programs ?? []).filter((p) => p.id !== id) },
-        t('programRemoved'),
-      )
-
-      const dirs = slice.allowedDirs ?? []
-      const progs = slice.programs ?? []
+      const kindKey = (entry) => (entry.kind === 'script' ? 'kind_script' : entry.kind === 'directory' ? 'kind_directory' : 'kind_program')
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-        // 顶部：标题 + 两个添加按钮（★★ 修问题 4：按钮与表单都在顶部，且表单是弹框）
-        h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' } },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 } },
-            h('div', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--dsw-alias-label-primary)' } }, title),
-            subtitle ? h('div', { style: S.tiny }, subtitle) : null,
-            scopeKey ? h('div', { style: { ...S.pathLine, marginTop: '2px' } }, scopeKey) : null),
-          h('div', { style: S.actions },
-            h('button', {
-              style: S.btnPrimary, type: 'button',
-              disabled: Boolean(busy),
-              onClick: () => setDialog({ kind: 'dir' }),
-            }, t('addDir')),
-            h('button', {
-              style: S.btn, type: 'button',
-              disabled: Boolean(busy),
-              onClick: () => setDialog({ kind: 'program' }),
-            }, t('addProgram')))),
+        h('div', { style: S.tiny }, t('thisSessionTip')),
+        h('div', { style: S.pathLine }, sid),
+        notice ? h('div', { style: noticeTone('error') }, notice) : null,
+        entries === null
+          ? h('div', { style: S.tiny }, '…')
+          : entries.length === 0
+            ? h('div', { style: S.tiny }, t('noEntries'))
+            : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+              entries.map((entry) => h('div', { key: entry.id, style: S.rowInline },
+                h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
+                  h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', overflowWrap: 'anywhere' } },
+                    `${entry.name || entry.id} · ${t(kindKey(entry))}`),
+                  h('div', { style: S.pathLine }, entry.kind === 'directory' ? (entry.path ?? '') : (entry.launch?.exe ?? ''))),
+                busy === entry.id
+                  ? h('span', { style: S.tiny }, '…')
+                  : h(Switch, { checked: (entry.sessions ?? []).includes(sid), onChange: () => toggle(entry) })))))
+    }
 
-        notice ? h('div', { style: noticeTone(notice.tone) }, notice.text) : null,
-
-        // 生效范围概览（三层并集）
-        info
-          ? h('div', {
-            style: {
-              ...S.tiny, display: 'flex', flexDirection: 'column', gap: '3px',
-              padding: '6px 8px', borderRadius: '6px', background: 'var(--dsw-alias-bg-layer-1)',
-            },
-          },
-          h('div', null,
-            `${t('effectiveScope')}：${info.counts.effectiveDirs} ${t('dirsUnit')} / ${info.counts.effectivePrograms} ${t('programsUnit')}`),
-          // 会话面板里显示它属于哪个工作区 —— 用户才知道两层的层级关系
-          scope === 'session' && info.workspaceKey
-            ? h('div', { style: { opacity: 0.85 } },
-              `${t('belongsToWorkspace')}：${info.workspaceTitle || info.workspaceKey}`)
-            : null,
-          scope === 'session' && !info.workspaceKey
-            ? h('div', { style: { opacity: 0.7 } }, t('workspaceUnresolved'))
-            : null)
-          : null,
-
-        // 目录列表
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-          h('div', { style: S.label }, `${t('sec_dirs')}（${dirs.length}）`),
-          dirs.length === 0
-            ? h('div', { style: S.tiny }, t('noDirs'))
-            : dirs.map((dir) => h('div', { key: dir, style: S.rowInline },
-              h('div', { style: { ...S.pathLine, flex: '1 1 200px', minWidth: 0 } }, dir),
-              h('button', {
-                style: { ...S.btnDanger, padding: '2px 8px' }, type: 'button',
-                disabled: Boolean(busy),
-                onClick: () => removeDir(dir),
-              }, t('removeDir'))))),
-
-        // 程序列表
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-          h('div', { style: S.label }, `${t('sec_programs')}（${progs.length}）`),
-          progs.length === 0
-            ? h('div', { style: S.tiny }, t('noPrograms'))
-            : progs.map((p) => h('div', { key: p.id, style: S.rowInline },
-              h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
-                h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, p.name || p.id),
-                h('div', { style: S.pathLine }, p.launch?.exe ?? '')),
-              h('button', {
-                style: { ...S.btnDanger, padding: '2px 8px' }, type: 'button',
-                disabled: Boolean(busy),
-                onClick: () => removeProgram(p.id),
-              }, t('removeDir'))))),
-
-        // 授权记录
-        h('details', { style: S.details },
-          h('summary', { style: S.summary }, `${t('sec_grants')}（${grants.length}）`),
-          grants.length === 0
+    /** 授权记录（审计）：GET /grants，折叠展示。 */
+    function GrantsLog({ t }) {
+      const [grants, setGrants] = React.useState(null)
+      React.useEffect(() => {
+        (async () => {
+          try {
+            const res = await jsonFetch('/grants?limit=40')
+            setGrants(res.ok ? (res.body.grants ?? []) : [])
+          } catch {
+            setGrants([])
+          }
+        })()
+      }, [])
+      const rows = grants ?? []
+      return h('details', { style: S.details },
+        h('summary', { style: S.summary }, `${t('sec_grants')}${grants === null ? '' : `（${rows.length}）`}`),
+        grants === null
+          ? h('div', { style: { ...S.tiny, marginTop: '6px' } }, '…')
+          : rows.length === 0
             ? h('div', { style: { ...S.tiny, marginTop: '6px' } }, t('noGrants'))
             : h('div', { style: { marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px' } },
-              grants.map((g, i) => h('div', {
+              rows.map((g, i) => h('div', {
                 key: `${g.at}-${i}`,
                 style: { ...S.tiny, display: 'flex', gap: '8px', flexWrap: 'wrap' },
               },
               h('span', { style: { opacity: 0.7 } }, formatTime(g.at)),
               h('span', { style: { fontWeight: 600 } }, scopeLabel(g.scope, t)),
               h('span', null, g.action),
-              h('span', { style: { opacity: 0.8, overflowWrap: 'anywhere' } }, g.target))))),
-
-        // 弹框
-        dialog?.kind === 'dir'
-          ? h(Modal, { title: t('addDir'), onClose: () => setDialog(null), t },
-            h(DirDialog, {
-              existing: dirs,
-              t,
-              onCancel: () => setDialog(null),
-              onConfirm: async (dir) => {
-                const ok = await addDir(dir)
-                if (ok) setDialog(null)
-              },
-            }))
-          : null,
-        dialog?.kind === 'program'
-          ? h(Modal, { title: t('addProgram'), width: '720px', onClose: () => setDialog(null), t },
-            h(ProgramDialog, {
-              existing: progs,
-              t,
-              onCancel: () => setDialog(null),
-              onConfirm: async (entry) => {
-                const ok = await addProgram(entry)
-                if (ok) setDialog(null)
-              },
-            }))
-          : null)
+              h('span', { style: { opacity: 0.8, overflowWrap: 'anywhere' } }, g.target)))))
     }
 
     function scopeLabel(scope, t) {
+      if (scope === 'entry') return t('grantEntry')
       if (scope === 'workspace') return t('scopeWorkspace')
       if (scope === 'session') return t('scopeSession')
       return t('scopeGlobal')
@@ -1266,85 +1423,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 加目录弹框：输入框 + 校验（绝对路径、去重）。 */
-    function DirDialog({ existing, t, onCancel, onConfirm }) {
-      const [value, setValue] = React.useState('')
-      const [err, setErr] = React.useState(null)
-      const submit = () => {
-        const dir = value.trim()
-        if (dir === '') { setErr(t('needDirPath')); return }
-        if (!/^[a-zA-Z]:[\\/]/.test(dir) && !dir.startsWith('\\\\') && !dir.startsWith('/')) {
-          setErr(t('needAbsolute')); return
-        }
-        if (existing.some((d) => d.toLowerCase() === dir.toLowerCase())) {
-          setErr(t('dirExists')); return
-        }
-        onConfirm(dir)
-      }
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-        h(Field, { label: t('f_dirPath'), hint: t('f_dirPathTip') },
-          h(TextInput, { value, onChange: (v) => { setValue(v); setErr(null) }, placeholder: 'D:\\models' })),
-        err ? h('div', { style: noticeTone('error') }, err) : null,
-        h('div', { style: S.actions },
-          h('button', { style: S.btnPrimary, type: 'button', onClick: submit }, t('save')),
-          h('button', { style: S.btn, type: 'button', onClick: onCancel }, t('cancel'))))
-    }
-
-    /**
-     * 加程序弹框：复用主表单的字段，但简化——作用域面板加的是"临时/局部"条目，
-     * 不需要全部高级项。
-     */
-    function ProgramDialog({ existing, t, onCancel, onConfirm }) {
-      const [form, setForm] = React.useState({
-        name: '', id: '', exe: '', args: '', cwd: '', description: '',
-      })
-      const [err, setErr] = React.useState(null)
-      const set = (patch) => setForm((prev) => ({ ...prev, ...patch }))
-
-      const submit = () => {
-        const name = form.name.trim()
-        const exe = form.exe.trim()
-        if (name === '') { setErr(t('needName')); return }
-        if (exe === '') { setErr(t('needExe')); return }
-        if (!/^[a-zA-Z]:[\\/]/.test(exe) && !exe.startsWith('\\\\') && !exe.startsWith('/')) {
-          setErr(t('needAbsolute')); return
-        }
-        const id = form.id.trim() || name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || `program-${existing.length + 1}`
-        if (existing.some((p) => p.id === id)) { setErr(t('idExists')); return }
-        onConfirm({
-          id,
-          name,
-          enabled: true,
-          description: form.description.trim(),
-          launch: {
-            exe,
-            args: form.args.trim(),
-            cwd: form.cwd.trim(),
-            env: {},
-          },
-          ready: { url: '', timeoutMs: 180000 },
-        })
-      }
-
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-        h(Field, { label: t('f_name') },
-          h(TextInput, { value: form.name, onChange: (v) => { set({ name: v }); setErr(null) }, placeholder: 'MyTool' })),
-        h(Field, { label: t('f_id'), hint: t('f_idTip') },
-          h(TextInput, { value: form.id, onChange: (v) => { set({ id: v }); setErr(null) }, placeholder: '(留空自动生成)' })),
-        h(Field, { label: t('f_exe'), hint: t('f_exeTip') },
-          h(TextInput, { value: form.exe, onChange: (v) => { set({ exe: v }); setErr(null) }, placeholder: 'C:\\...\\app.exe' })),
-        h(Field, { label: t('f_args'), hint: t('f_argsTip') },
-          h(TextInput, { value: form.args, onChange: (v) => set({ args: v }), placeholder: '--port 8188' })),
-        h(Field, { label: t('f_cwd'), hint: t('f_cwdTip') },
-          h(TextInput, { value: form.cwd, onChange: (v) => set({ cwd: v }), placeholder: '(留空 = exe 目录)' })),
-        h(Field, { label: t('f_desc'), hint: t('f_descTip') },
-          h(TextArea, { value: form.description, onChange: (v) => set({ description: v }), rows: 2 })),
-        err ? h('div', { style: noticeTone('error') }, err) : null,
-        h('div', { style: S.actions },
-          h('button', { style: S.btnPrimary, type: 'button', onClick: submit }, t('save')),
-          h('button', { style: S.btn, type: 'button', onClick: onCancel }, t('cancel'))))
-    }
-
     // ==================== 设置页主面板 ====================
 
     function LauncherSection({ t }) {
@@ -1355,7 +1433,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(null)
       const [confirmStop, setConfirmStop] = React.useState(null)
       const [verifyResults, setVerifyResults] = React.useState({})
-      const [editing, setEditing] = React.useState(null) // 'new' | program id | null
+      const [editing, setEditing] = React.useState(null) // 'new:program'|'new:script'|'new:directory' | 条目 id | null
+      const [authDialog, setAuthDialog] = React.useState(null) // 条目 id：会话授权弹框
       const [notice, setNotice] = React.useState(null)
       const [formNotice, setFormNotice] = React.useState(null)
       const [confirmDelete, setConfirmDelete] = React.useState(null)
@@ -1392,12 +1471,17 @@ window.__ModuleLoader__.load({
       }
 
       const plugin = data.plugin ?? {}
-      const programs = data.programs ?? []
       const gates = data.gates ?? {}
       const logs = data.logs ?? {}
       const dryRun = plugin.dryRun === true
       const globalEnabled = plugin.enabled !== false
       const cfg = config ?? {}
+      // ★ 统一条目池：列表以配置全池为准（含目录条目与 sessions 字段），
+      //   运行态（phase/日志/门控）按 id 从状态快照合并进来。
+      const entries = cfg.programs ?? []
+      const liveById = new Map((data.programs ?? []).map((p) => [p.id, p]))
+      const isNewEditing = typeof editing === 'string' && editing.startsWith('new:')
+      const newKind = isNewEditing ? editing.slice(4) : 'program'
 
       const saveNew = async (entry) => {
         setBusy('form')
@@ -1441,80 +1525,131 @@ window.__ModuleLoader__.load({
           busy === 'global' ? h('span', { style: S.tiny }, '…') : null),
         h('div', { style: S.hint }, globalEnabled ? t('globalTipOn') : t('globalTipOff')),
         dryRun ? h('div', { style: noticeTone('warn') }, t('dryRunOn')) : null,
+        cfg.migrationPending ? h('div', { style: noticeTone('warn') }, t('migrationPending')) : null,
+        (cfg.unauthCount ?? 0) > 0
+          ? h('div', { style: noticeTone('warn') }, t('unauthNotice').replace('{n}', String(cfg.unauthCount)))
+          : null,
         cfg.path ? h('div', { style: S.tiny }, `${t('cfgPath')}: ${cfg.path}`) : null,
         notice ? h('div', { style: noticeTone(notice.tone) }, notice.text) : null)
 
-      // ---- 应用列表 ----
+      // ---- 软件/脚本/目录 列表（统一条目池） ----
+      const openAuth = (id) => setAuthDialog(id)
       const list = h('div', { style: S.card },
         h('div', { style: S.cardHead },
           t('sec_programs'),
           h('div', { style: S.actions },
             h('button', {
               style: S.btnPrimary,
-              onClick: () => { setEditing(editing === 'new' ? null : 'new') },
-            }, t('addApp')))),
-        programs.length === 0 ? h('div', { style: S.sub }, t('empty')) : null,
-        programs.map((program) => h(React.Fragment, { key: program.id },
-          h(AppCard, {
-            program,
-            logInfo: logs[program.id],
-            gate: gates[program.id],
-            editing: editing === program.id,
-            busy,
-            confirmStop,
-            setConfirmStop,
-            t,
-            onEdit: (next) => setEditing(next),
-            onDelete: deleteProgram,
-            onStart: async (id) => {
-              // 启动后需要看进度与状态，切到完整模式（含轮询）
-              setLive(true)
-              setBusy(`${id}:start`)
-              await run(() => post('/start', { id }), t('startedTip'))
-              setBusy(null)
-            },
-            onStop: async (id) => {
-              setBusy(`${id}:stop`)
-              const body = await run(() => post('/stop', { id }), t('stop'))
-              if (body && body.ok === false) setNotice({ tone: 'error', text: body.result?.reason ?? t('stop') })
-              setBusy(null)
-            },
-            onVerify: async (id) => {
-              setBusy(`${id}:verify`)
-              const body = await run(() => get(`/verify?id=${encodeURIComponent(id)}`), t('verify'))
-              setBusy(null)
-              if (body && body.ok !== undefined) {
-                setVerifyResults((prev) => ({ ...prev, [id]: body }))
-              }
-            },
-            verifyResult: verifyResults[program.id],
-          }))))
+              onClick: () => setEditing('new:program'),
+            }, t('addProgram')),
+            h('button', {
+              style: S.btn,
+              onClick: () => setEditing('new:script'),
+            }, t('addScript')),
+            h('button', {
+              style: S.btn,
+              onClick: () => setEditing('new:directory'),
+            }, t('addDirectory')))),
+        entries.length === 0 ? h('div', { style: S.sub }, t('empty')) : null,
+        entries.map((entry) => {
+          if (entry.kind === 'directory') {
+            return h(DirectoryCard, {
+              key: entry.id,
+              entry,
+              t,
+              editing: editing === entry.id,
+              onEdit: (next) => setEditing(next),
+              onDelete: deleteProgram,
+              onAuth: openAuth,
+            })
+          }
+          // 配置条目 + 运行态快照按 id 合并（快照里没有的字段以配置为准）
+          const program = { ...entry, ...(liveById.get(entry.id) ?? {}) }
+          return h(React.Fragment, { key: entry.id },
+            h(AppCard, {
+              program,
+              logInfo: logs[entry.id],
+              gate: gates[entry.id],
+              editing: editing === entry.id,
+              busy,
+              confirmStop,
+              setConfirmStop,
+              t,
+              onEdit: (next) => setEditing(next),
+              onDelete: deleteProgram,
+              onAuth: openAuth,
+              onStart: async (id) => {
+                // 启动后需要看进度与状态，切到完整模式（含轮询）
+                setLive(true)
+                setBusy(`${id}:start`)
+                await run(() => post('/start', { id }), t('startedTip'))
+                setBusy(null)
+              },
+              onStop: async (id) => {
+                setBusy(`${id}:stop`)
+                const body = await run(() => post('/stop', { id }), t('stop'))
+                if (body && body.ok === false) setNotice({ tone: 'error', text: body.result?.reason ?? t('stop') })
+                setBusy(null)
+              },
+              onVerify: async (id) => {
+                setBusy(`${id}:verify`)
+                const body = await run(() => get(`/verify?id=${encodeURIComponent(id)}`), t('verify'))
+                setBusy(null)
+                if (body && body.ok !== undefined) {
+                  setVerifyResults((prev) => ({ ...prev, [id]: body }))
+                }
+              },
+              verifyResult: verifyResults[entry.id],
+            }))
+        }))
       // 编辑 / 新建表单统一用弹框（不再在列表里内联展开）：
       // 列表可能很长，内联表单会被挤到看不见的位置。
+      const newTitleKey = newKind === 'script' ? 'addScript' : newKind === 'directory' ? 'addDirectory' : 'addProgram'
       const formDialog = editing === null
         ? null
         : h(Modal, {
-          title: editing === 'new' ? t('addApp') : t('edit'),
+          title: isNewEditing ? t(newTitleKey) : t('edit'),
           width: '720px',
           onClose: () => setEditing(null),
           t,
         },
         h(ErrorBoundary, { key: `form-${editing}` },
           h(ProgramForm, {
-            initial: editing === 'new' ? null : toForm(data.programs.find((p) => p.id === editing) ?? {}),
-            isNew: editing === 'new',
+            initial: isNewEditing
+              ? { ...emptyForm(), kind: newKind }
+              : toForm(entries.find((p) => p.id === editing) ?? {}),
+            isNew: isNewEditing,
             busy: busy === 'form',
             notice: formNotice,
             t,
             onCancel: () => setEditing(null),
-            onSave: editing === 'new'
+            onSave: isNewEditing
               ? saveNew
               : (entry) => saveEdit(editing, entry),
+          })))
+
+      // 会话授权弹框：只改 sessions，不动条目其它字段
+      const authEntry = authDialog === null ? null : (entries.find((p) => p.id === authDialog) ?? null)
+      const authModal = authEntry === null
+        ? null
+        : h(Modal, {
+          title: `${t('authTitle')} · ${authEntry.name || authEntry.id}`,
+          width: '640px',
+          onClose: () => setAuthDialog(null),
+          t,
+        },
+        h(ErrorBoundary, { key: `auth-${authDialog}` },
+          h(SessionAuthDialog, {
+            entry: authEntry,
+            t,
+            onClose: () => setAuthDialog(null),
+            onSaved: async () => { await Promise.all([refresh(), refreshConfig()]) },
           })))
 
       return h('div', { style: S.wrap },
         header,
         formDialog,
+        authModal,
         h(SystemCard, {
           system: data.system,
           t,
@@ -1526,24 +1661,16 @@ window.__ModuleLoader__.load({
           },
         }),
         list,
-        // 全局作用域的授权目录（原有 AllowedDirsCard 保留在更下方）
+        // 授权记录（审计）：三层作用域切片已废除，只剩条目级会话授权记录
         h('div', { style: S.card },
-          h(ScopePanel, {
-            scope: 'global',
-            scopeKey: '',
-            title: t('scopeGlobal'),
-            subtitle: t('globalScopeTip'),
-            t,
-            // 全局层改动会改变程序列表与门控，重取一次
-            onChanged: async () => { await Promise.all([refresh(), refreshConfig()]) },
-          })))
+          h(GrantsLog, { t })))
     }
 
 
-    // ==================== 作用域入口按钮 ====================
+    // ==================== 会话入口按钮 ====================
 
     /**
-     * 会话「...」菜单里的一行：打开本会话的应用面板。
+     * 会话「...」菜单里的一行：打开「本会话授权」面板。
      *
      * 放在这里而不是侧边栏别处，是因为这是唯一开放给插件的会话菜单扩展点，
      * 官方已在此放了 pin/rename/fork/archive；我们的行排在 archive 之后。
@@ -1561,38 +1688,26 @@ window.__ModuleLoader__.load({
             color: 'var(--dsw-alias-label-primary)', borderRadius: '4px',
           },
           onClick: (e) => { e.stopPropagation(); setOpen(true) },
-        }, `🔐 ${t('navAuth')}`),
+        }, `🔐 ${t('thisSessionAuth')}`),
         open
-          ? h(Modal, { title: t('navAuth'), width: '680px', onClose: () => setOpen(false), t },
-            h(ScopePanel, {
-              scope: 'session',
-              scopeKey: String(sessionId ?? ''),
-              title: t('navAuth'),
-              subtitle: t('sessionScopeTip'),
-              t,
-            }))
+          ? h(Modal, { title: t('thisSessionAuth'), width: '680px', onClose: () => setOpen(false), t },
+            h(SessionGrantPanel, { sessionId: String(sessionId ?? ''), t }))
           : null)
     }
 
-    /** 会话顶部入口：点了弹出「本会话」作用域面板。 */
+    /** 会话顶部入口：点了弹出「本会话授权」面板（逐条目开关）。 */
     function SessionScopeButton({ t, sessionId }) {
       const [open, setOpen] = React.useState(false)
       return h(React.Fragment, null,
         h('button', {
           style: { ...S.btn, padding: '2px 8px', fontSize: '11.5px' },
           type: 'button',
-          title: t('sessionScopeTip'),
+          title: t('thisSessionTip'),
           onClick: () => setOpen(true),
-        }, `🔐 ${t('navAuth')}`),
+        }, `🔐 ${t('thisSessionAuth')}`),
         open
-          ? h(Modal, { title: t('navAuth'), width: '680px', onClose: () => setOpen(false), t },
-            h(ScopePanel, {
-              scope: 'session',
-              scopeKey: String(sessionId ?? ''),
-              title: t('navAuth'),
-              subtitle: t('sessionScopeTip'),
-              t,
-            }))
+          ? h(Modal, { title: t('thisSessionAuth'), width: '680px', onClose: () => setOpen(false), t },
+            h(SessionGrantPanel, { sessionId: String(sessionId ?? ''), t }))
           : null)
     }
 
@@ -1699,16 +1814,12 @@ window.__ModuleLoader__.load({
       }, (props) => h(ErrorBoundary, null,
         h(SessionScopeButton, { t, sessionId: props?.sessionId }))))
 
-      // ==================== 工作区入口 ====================
-      // ★ 为什么不在侧边栏工作区行里：
-      //   DSH 当前**没有开放「工作区行 / 工作区菜单」的 slot**。
-      //   `sidebar.workspaces` 是 single（要挂就得整块替换官方浏览器，replaceRisk 太高），
-      //   而 `sidebar.workspaces.session.menu.item` / `.session.row.action` 的
-      //   ownerProps 只有 sessionId，明确是"one Session row"，不是工作区行。
-      //   所以工作区级授权放在设置页，外加一个能读到工作区列表的入口（见下方会话菜单）。
-      //
-      //   之前错误地挂在 `sidebar.panellist`（面板图标区）：那里既拿不到工作区上下文，
-      //   又会因为顶替面板而影响侧边栏，属于位置选错。
+      // ==================== 为什么没有「工作区入口」 ====================
+      // ★ poolVersion 2 起授权粒度是「条目 × 会话」，不再有工作区/全局授权层，
+      //   所以不需要工作区入口。历史背景：DSH 也没有开放「工作区行 / 工作区菜单」
+      //   的 slot（`sidebar.workspaces` 是 single，整块替换官方浏览器风险太高；
+      //   `sidebar.workspaces.session.menu.item` 的 ownerProps 只有 sessionId）。
+      //   旧版工作区授权在宿主侧迁移时展开成会话授权（runtime.expandWorkspaceGrants）。
 
       // ==================== 会话「...」菜单入口（与会话的重命名/归档并列） ====================
       // 这个 slot 就是会话行「...」菜单，官方已在这里放 pin/rename/fork/archive。
