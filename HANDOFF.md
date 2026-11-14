@@ -1,6 +1,6 @@
 # 交接文档：dsh-app-launcher（显示名：本地授权）
 
-> 更新 2026-11-14（T24 权限重构已完成，commit `b273496`）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
+> 更新 2026-11-14（T24 权限重构 `b273496`；客户端拆分组合根+8 chunk `81b503d`）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
 > 来源会话「资源监控与软件自启动插件方案」= `session-2be05f3c-fa59-4574-8127-b502bcf27867`
 > （2026-11-08 19:57 → 11-14 01:00，27 轮，1269 次工具调用；上下文 ~1,048,365 tokens 溢出而死）。
 > 原始日志：`C:\Users\wjm\.dsh\sessions\--D-wjm-Documents-deepseek-harness-default-workspace--\session-2be05f3c-fa59-4574-8127-b502bcf27867\session.v4.jsonl.zstd`（多帧 zstd，按 magic `28 B5 2F FD` 切帧解）。
@@ -10,7 +10,8 @@
 ## 〇、一句话现状
 
 插件**已安装可用**：desktop profile bundles 已选中、Junction 链接指向工作区、用户层配置在位、
-**218 项逻辑测试全绿** + 门面/渲染测试、git HEAD `b273496`、工作区干净。
+**218 项逻辑测试全绿** + 门面/渲染测试（14 用例+反向验证）、git HEAD `81b503d`、工作区干净。
+客户端已拆为组合根 + 8 个职责 chunk（commit `81b503d`，详见 §四与 README「客户端文件结构」）。
 
 **★ T24 权限重构已完成（2026-11-14，commit `b273496`，21 文件 +2173/−1307）。** 用户最后一条需求：
 
@@ -108,13 +109,14 @@ code=CONTEXT_WINDOW_EXCEEDED（~1,048,365 tokens）。**新会话不要试图复
 lib/ index.js(入口/门面★必须显式转发每个新方法) config.mjs store.mjs edit.mjs browse.mjs
      gate.mjs sysinfo.mjs programs.mjs(★buildChildEnv) status.mjs http.mjs tools.mjs
      runtime.mjs scopes.mjs verify.mjs
-client/client.js（手写客户端插件；ErrorBoundary 外层包分区+内层包每表单；Modal 弹框表单）
+client/client.js（★组合根：加载+装配+注册 slot）+ 8 个职责 chunk：client.i18n/core/hooks/
+     controls/cards/sessions/form/panel.js（各导出 build(deps)，依赖显式传入，无构建步骤）
 test/ verify.mjs(136) scopes.mjs(19) workspace-scope.mjs(31) lazy.mjs(19) hot-reload.mjs(13)
-      facade.mjs(静态核对面面转发) render.mjs(按组件实例分派 hook 真渲染到加载分支+反向验证，12 用例)
+      facade.mjs(静态核对面面转发) render.mjs(按组件实例分派 hook 真渲染到加载分支+反向验证，14 用例)
 ```
 
 跑测试：`npm run verify`（package.json scripts.verify 串起全部 7 个）。**218 项逻辑全绿**（136+19+31+19+13）+ facade + render。
-render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceError），否则假通过；v4 已修「全局 hookStore 让嵌套组件 hook 互踩」与「children 没进 props 导致子组件没渲染」两个假通过隐患。
+render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceError），否则假通过；v4 已修「全局 hookStore 让嵌套组件 hook 互踩」与「children 没进 props 导致子组件没渲染」两个假通过隐患。**v5（拆分后）**：loadPlugin() 模拟 `require.async` 逐个加载 chunk、await 异步 apply、用 `__DSH_LAUNCHER_TEST_HOOK__` 抓已装配模块；假 React 的 **useEffect/useCallback/useMemo 都各占一个 hook 槽、每个 effect 独立跑一次**——旧版单个 effectRan 标志会让 LauncherSection 里 useConfig 的 effect 被 useStatus 的挤掉（配置加载不出、整面板假通过）。反向验证改为替换 client.form.js 源码再加载。
 **工具 execute 签名**：app_list/system_status 是 `execute(exec)` 单参；app_start/app_stop/app_verify/app_toggle 是 `execute(args, exec)` 双参（写测试别搞混）。
 
 ---

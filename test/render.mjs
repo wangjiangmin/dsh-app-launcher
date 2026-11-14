@@ -15,17 +15,16 @@
  *     → useSessions/useConfig 的「加载完成」分支（勾选列表/条目开关）真的被走到。
  *  4. 覆盖 DirectoryCard / SessionPicker / SessionAuthDialog / SessionGrantPanel，
  *     最后做反向验证（故意改坏组件名，确认测试会报错）。
+ *
+ * v5（拆分后）：client.js 是组合根，UI 在 8 个 package-local chunk 里。loadPlugin()
+ *  模拟 require.async 逐个加载 chunk、await 异步 apply，用 __DSH_LAUNCHER_TEST_HOOK__
+ *  抓已装配模块。反向验证改为替换 client.form.js 的源码再加载。
  */
 import { readFileSync } from 'node:fs'
 
-const originalSrc = readFileSync('client/client.js', 'utf8')
-const marker = 'return { name: NS, inject, apply }'
-if (!originalSrc.includes(marker)) {
-  console.log('✗ 找不到导出锚点，测试需更新')
-  process.exit(1)
-}
-const EXPORT_LINE = 'globalThis.__TEST_EXPORTS__ = { ProgramForm, LauncherSection, AppCard, SystemCard, ErrorBoundary, DirectoryCard, SessionPicker, SessionAuthDialog, SessionGrantPanel, GrantsLog }\n      '
-const src = originalSrc.replace(marker, EXPORT_LINE + marker)
+// v5：client.js 已拆成组合根 + 8 个 package-local chunk。加载逻辑见下方 loadPlugin()：
+// 假 require.async 逐个读 chunk 文件并 materialize，entry.apply 为 async，
+// 通过 __DSH_LAUNCHER_TEST_HOOK__ 抓取已装配的模块（替代旧的整文件锚点注入）。
 
 function createElement(type, props, ...children) {
   const flat = children.flat()
@@ -56,15 +55,32 @@ const React = {
   useState(initial) {
     const d = current
     const i = d.index++
-    if (!(i in d.hooks)) d.hooks[i] = typeof initial === 'function' ? initial() : initial
-    return [d.hooks[i], (next) => { d.hooks[i] = typeof next === 'function' ? next(d.hooks[i]) : next }]
+    if (!(i in d.hooks)) d.hooks[i] = { v: typeof initial === 'function' ? initial() : initial }
+    const slot = d.hooks[i]
+    return [slot.v, (next) => { slot.v = typeof next === 'function' ? next(slot.v) : next }]
   },
+  // ★ 每个 useEffect 占一个 hook 槽、各自只跑一次（贴近真实 React）。
+  //   旧版用单个 d.effectRan 标志，导致 LauncherSection 里 useStatus 的 effect 跑完后
+  //   useConfig 的 effect 被跳过 → 配置永远加载不出来（整面板假通过）。
   useEffect(fn) {
     const d = current
-    if (d && !d.effectRan) { d.effectRan = true; try { fn() } catch { /* 加载分支兜底 */ } }
+    const i = d.index++
+    if (!(i in d.hooks)) d.hooks[i] = { ran: false }
+    const slot = d.hooks[i]
+    if (!slot.ran) { slot.ran = true; try { fn() } catch { /* 加载分支兜底 */ } }
   },
-  useCallback(fn) { return fn },
-  useMemo(fn) { return fn() },
+  useCallback(fn) {
+    const d = current
+    const i = d.index++
+    if (!(i in d.hooks)) d.hooks[i] = { fn }
+    return d.hooks[i].fn
+  },
+  useMemo(fn) {
+    const d = current
+    const i = d.index++
+    if (!(i in d.hooks)) d.hooks[i] = { v: fn() }
+    return d.hooks[i].v
+  },
 }
 React.default = React
 
@@ -94,11 +110,7 @@ const ctx = {
   locale,
 }
 
-globalThis.window = {
-  __ModuleLoader__: {
-    load({ id, factory }) { mod = factory((n) => { if (n === 'react') return React; throw new Error(n) }) },
-  },
-}
+// window.__ModuleLoader__ 由 loadPlugin() 按「entry + chunk」分别捕获（见下）。
 
 const SESSIONS = [
   { id: 'sess-a', title: '会话 A', live: true, subagent: false, createdAt: 1 },
@@ -124,12 +136,53 @@ globalThis.fetch = async (url) => {
   return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body }
 }
 
-let mod = null
-new Function(src)()
-mod.apply(ctx)
+// ---- 加载器：模拟 DSH 的 entry + package-local chunk 机制 ----
+// overrides: { 'client.<name>.js': 源码 }，用于反向验证时替换某个 chunk。
+async function loadPlugin(overrides = {}) {
+  const chunkRegs = new Map()
+  let entryReg = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load(reg) { if (reg.chunk) chunkRegs.set(reg.chunk, reg); else entryReg = reg },
+    },
+  }
+  const fakeRequire = (name) => { if (name === 'react') return React; throw new Error('unexpected sync require: ' + name) }
+  fakeRequire.async = async (spec) => {
+    const file = spec.replace(/^\.\//, '')
+    if (!chunkRegs.has(file)) {
+      const chunkSrc = overrides[file] ?? readFileSync('client/' + file, 'utf8')
+      new Function(chunkSrc)() // 执行 chunk → 经 window.__ModuleLoader__.load 注册
+    }
+    const reg = chunkRegs.get(file)
+    if (!reg) throw new Error('chunk 未注册: ' + file)
+    return reg.factory(fakeRequire) // { build }
+  }
+  const entrySrc = overrides['client.js'] ?? readFileSync('client/client.js', 'utf8')
+  new Function(entrySrc)() // 注册 entry
+  if (!entryReg) throw new Error('entry 未注册')
+  const mod = entryReg.factory(fakeRequire)
+  let captured = null
+  globalThis.__DSH_LAUNCHER_TEST_HOOK__ = (mods) => { captured = mods }
+  await mod.apply(ctx)
+  globalThis.__DSH_LAUNCHER_TEST_HOOK__ = undefined
+  if (!captured) throw new Error('测试钩子未被调用（entry.apply 没装配模块）')
+  return { mod, captured }
+}
 
-const exports = globalThis.__TEST_EXPORTS__
-if (!exports?.ProgramForm || !exports?.DirectoryCard || !exports?.SessionPicker || !exports?.SessionGrantPanel) {
+const { captured } = await loadPlugin()
+const exports = {
+  ProgramForm: captured.form.ProgramForm,
+  LauncherSection: captured.panel.LauncherSection,
+  AppCard: captured.cards.AppCard,
+  SystemCard: captured.cards.SystemCard,
+  ErrorBoundary: captured.controls.ErrorBoundary,
+  DirectoryCard: captured.cards.DirectoryCard,
+  SessionPicker: captured.sessions.SessionPicker,
+  SessionAuthDialog: captured.sessions.SessionAuthDialog,
+  SessionGrantPanel: captured.sessions.SessionGrantPanel,
+  GrantsLog: captured.sessions.GrantsLog,
+}
+if (!exports.ProgramForm || !exports.DirectoryCard || !exports.SessionPicker || !exports.SessionGrantPanel) {
   console.log('✗ 未能拿到全部待测组件')
   process.exit(1)
 }
@@ -291,6 +344,25 @@ if (panellist && mainReg && panellist.id !== mainReg.key) {
   console.log('用例12 key 配对：ok（' + panellist.id + '）')
 }
 
+// ---- 用例13：SystemCard（系统资源卡片，含 GPU/CPU/内存 pills + 占用者）----
+renderOnce(exports.SystemCard, {
+  system: {
+    at: Date.now(), lazy: false,
+    gpu: { available: true, name: 'GPU0', utilPct: 12, freeMiB: 10000 },
+    cpu: { pct: 20 }, memory: { freeMiB: 16000, totalMiB: 32000 },
+    gpuHolders: [{ pid: 123, name: 'comfyui', usedMiB: 2000 }],
+  },
+  t, onProbe() {}, checking: false,
+})
+if (!seen.has('Pill')) problems.push('用例13 SystemCard 未渲染到 Pill')
+console.log('用例13 系统资源卡片：ok（组件 ' + seen.size + ' 种）')
+
+// ---- 用例14：LauncherSection 整面板（配置全池 + 运行态合并，渲染条目卡/系统卡/头部）----
+await renderLoaded(exports.LauncherSection, { t })
+if (!seen.has('AppCard') && !seen.has('DirectoryCard')) problems.push('用例14 整面板未渲染到任何条目卡片（假通过）')
+if (!seen.has('SystemCard')) problems.push('用例14 整面板未渲染到 SystemCard')
+console.log('用例14 整面板：ok（组件 ' + seen.size + ' 种）')
+
 if (problems.length > 0) {
   console.log('\n✗ 发现渲染错误:')
   for (const p of problems) console.log('  ' + p)
@@ -298,16 +370,17 @@ if (problems.length > 0) {
 }
 
 // ---------- 反向验证：故意改坏组件名，确认测试抓得到（防假通过）----------
-const brokenSrc = src.replace('h(SessionPicker, { selected: form.sessions', 'h(SessionPickerTYPO, { selected: form.sessions')
-if (brokenSrc === src) {
+// 锚点现在在 client.form.js（ProgramForm 里渲染 SessionPicker 的那行）。
+const formSrc = readFileSync('client/client.form.js', 'utf8')
+const brokenFormSrc = formSrc.replace('h(SessionPicker, { selected: form.sessions', 'h(SessionPickerTYPO, { selected: form.sessions')
+if (brokenFormSrc === formSrc) {
   console.log('\n✗ 反向验证锚点未命中，测试需更新')
   process.exit(1)
 }
-new Function(brokenSrc)()
-const brokenExports = globalThis.__TEST_EXPORTS__
+const { captured: brokenCaptured } = await loadPlugin({ 'client.form.js': brokenFormSrc })
 resetCase()
 const before = problems.length
-renderTree(createElement(brokenExports.ProgramForm, { initial: null, isNew: true, busy: false, notice: null, t, onCancel() {}, onSave() {} }))
+renderTree(createElement(brokenCaptured.form.ProgramForm, { initial: null, isNew: true, busy: false, notice: null, t, onCancel() {}, onSave() {} }))
 if (problems.length <= before) {
   console.log('\n✗ 反向验证失败：改坏组件名后测试竟然没报错（说明渲染没真正走到目标分支）')
   process.exit(1)

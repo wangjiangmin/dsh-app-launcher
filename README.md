@@ -270,7 +270,7 @@ npm run verify        # 串起全部 7 个测试文件
 | `hot-reload.mjs` | 13 | 授权/增删条目热可见、别的会话不受影响、快照缓存不挡授权变更、enabled 挂/卸 tool |
 | `lazy.mjs` | 19 | 懒加载快照不采样/不探针/不污染缓存 |
 | `facade.mjs` | — | http 用到的 runtime 成员都已由 index.js 门面转发 |
-| `render.mjs` | 12 用例 | 真渲染到表单/卡片/会话组件的**加载完成分支**（按组件实例分派 hook），含**反向验证**（改坏组件名确认测试会报错，防假通过） |
+| `render.mjs` | 14 用例 | 真渲染到表单/卡片/会话组件/系统卡/**整面板**的**加载完成分支**（按组件实例分派 hook、每个 effect 独立跑），含**反向验证**（改坏组件名确认测试会报错，防假通过） |
 
 ## 八、已知边界
 
@@ -302,6 +302,27 @@ dsh plugin --profile desktop add <本目录>
 - 宿主半边：包 `main`（`lib/index.js`）—— 4 个 tool + 设置页接口；
 - 浏览器半边：包内 `dsh.client` 声明 + `exports["./client"]`（`client/client.js`）——
   DSH 的客户端插件不是普通 ESM，而是 `window.__ModuleLoader__.load({ id, factory })`
-  包一层、在 factory 里 `require('react')`，所以这个文件是手写的，**没有构建步骤**。
+  包一层、在 factory 里 `require('react')`，所以这些文件是手写的，**没有构建步骤**。
+
+### 客户端文件结构（组合根 + 职责 chunk）
+
+`client/client.js` 只做**组合根**：加载 chunk、按依赖装配、注册 slot。UI 逻辑拆在同目录
+8 个 **package-local chunk**（DSH 原生 `require.async('./client.*.js')` 机制，按需加载、
+无需构建）。每个 chunk 导出 `{ build(deps) }`，依赖由组合根**显式传入**，chunk 之间不互相
+require——build 的入参/返回值就是模块接口。依赖方向无环：
+
+| 文件 | 职责 | build 依赖 |
+| --- | --- | --- |
+| `client.i18n.js` | 文案字典 zh / en | — |
+| `client.core.js` | 常量 + 样式 S + 纯函数（格式化 / HTTP / 提示色） | — |
+| `client.hooks.js` | useStatus / useConfig / useSessions | React, core |
+| `client.controls.js` | Pill / Field / TextInput / TextArea / ErrorBoundary / Switch / Modal | React, h, core |
+| `client.cards.js` | AppCard / DirectoryCard / SystemCard | h, core, controls |
+| `client.sessions.js` | SessionPicker / SessionAuthDialog / SessionGrantPanel / GrantsLog | React, h, core, controls, hooks |
+| `client.form.js` | emptyForm / toForm / fromForm / ProgramForm | React, h, core, controls, sessions |
+| `client.panel.js` | LauncherSection / 会话入口按钮 / 插件栏图标 / 主面板 | React, h, core, controls, cards, sessions, form, hooks, ctxGet |
+
+> 改 UI 时按职责落到对应 chunk；新增跨模块依赖要在组合根 `client.js` 的 build 调用处显式接线。
+> chunk 文件名必须匹配 `client.<name>.js`（DSH 的 `CLIENT_CHUNK` 约束）。
 
 重启后在会话里看日志前缀 `[app-launcher]`；设置页应出现「本地应用」一节。
