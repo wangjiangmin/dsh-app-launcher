@@ -274,7 +274,7 @@ window.__ModuleLoader__.load({
             color: 'var(--dsw-alias-label-primary)', borderRadius: '4px',
           },
           onClick: (e) => { e.stopPropagation(); setOpen(true) },
-        }, `🔐 ${t('thisSessionAuth')}`),
+        }, `${t('thisSessionAuth')}`),
         open
           ? h(Modal, { title: t('thisSessionAuth'), width: '680px', onClose: () => setOpen(false), t },
             h(SessionGrantPanel, { sessionId: String(sessionId ?? ''), t }))
@@ -290,7 +290,7 @@ window.__ModuleLoader__.load({
           type: 'button',
           title: t('thisSessionTip'),
           onClick: () => setOpen(true),
-        }, `🔐 ${t('thisSessionAuth')}`),
+        }, `${t('thisSessionAuth')}`),
         open
           ? h(Modal, { title: t('thisSessionAuth'), width: '680px', onClose: () => setOpen(false), t },
             h(SessionGrantPanel, { sessionId: String(sessionId ?? ''), t }))
@@ -320,7 +320,7 @@ window.__ModuleLoader__.load({
           if (layout?.selectPanel) layout.selectPanel(NS)
         },
       },
-      h('span', { style: { fontSize: '15px', lineHeight: 1 } }, '🔐'),
+      h('span', { style: { fontSize: '15px', lineHeight: 1 } }, ''),
       wide ? h('span', null, t('nav')) : null)
     }
 
