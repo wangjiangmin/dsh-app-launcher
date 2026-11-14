@@ -1,6 +1,6 @@
 # 交接文档：dsh-app-launcher（显示名：本地授权）
 
-> 更新 2026-11-14（T24 权限重构 `b273496`；客户端拆分组合根+8 chunk `0f6c58d`；工作区授权+弹框 portal 修复 见 §〇）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
+> 更新 2026-11-14（T24 权限重构 `b273496`；客户端拆分组合根+8 chunk `0f6c58d`；工作区授权+弹框 portal 修复 `17573ed` 见 §〇）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
 > 来源会话「资源监控与软件自启动插件方案」= `session-2be05f3c-fa59-4574-8127-b502bcf27867`
 > （2026-11-08 19:57 → 11-14 01:00，27 轮，1269 次工具调用；上下文 ~1,048,365 tokens 溢出而死）。
 > 原始日志：`C:\Users\wjm\.dsh\sessions\--D-wjm-Documents-deepseek-harness-default-workspace--\session-2be05f3c-fa59-4574-8127-b502bcf27867\session.v4.jsonl.zstd`（多帧 zstd，按 magic `28 B5 2F FD` 切帧解）。
@@ -47,6 +47,7 @@ code=CONTEXT_WINDOW_EXCEEDED（~1,048,365 tokens）。**新会话不要试图复
 | 启动日志 | `C:\Users\wjm\.dsh\app-launcher\comfyui.log` 等（插件侧诊断也落盘，不再 0 字节） |
 
 **git 全链（新→旧）**：
+`17573ed` ★工作区授权+弹框 portal+会话/工作区列表修复 → `0f6c58d` 客户端拆分组合根+8 chunk → `5db596a` HANDOFF 指向拆分 →
 `b273496` ★T24 权限收缩（统一条目池+按会话授权，poolVersion 2）→ `59994b9` HANDOFF 更新至 11/14 →
 `d897803` 主页插件栏入口 → `3cd6a54` 忽略提交信息临时文件 → `1f67669` 授权热加载两阻断 bug →
 `6eecc48` 懒加载+改名本地授权+弹框 → `fc990ec` 「本会话应用」改名「授权」 → `5140aa2` 工作区入口位置修复 →

@@ -2,7 +2,7 @@
 
 **本地授权**：DSH 先查 CPU / GPU / 内存有没有高负载，空闲才允许 Agent 拉起
 ComfyUI、LM Studio、NInfer 或任何你配置的软件/脚本。所有「软件 / 脚本 / 目录」放在**统一条目池**里，
-**每条目按会话授权**（没有全局授权层）；授权给某会话后，该会话的 Agent 无需二次审批即可启动。
+**每条目按会话或工作区授权**（没有全局授权层）；授权给某会话、或某会话所属的工作区后，该会话的 Agent 无需二次审批即可启动。
 
 > 包名仍是 `dsh-app-launcher`（改名会影响 profile 里的安装路径与 patch id），
 > 但界面上显示为「本地授权 / Local Authorization」。
@@ -91,7 +91,8 @@ DSH 的工具表是**进程级全局**的，所以：
 | `id` | 唯一 id，Agent 用它在 tool 里指代（`comfyui` / `lm-studio` / `ninfer`） |
 | `name` | 显示名 |
 | `kind` | `program`（默认）/ `script` / `directory` |
-| `sessions` | **授权给的会话 id 数组**；`[]` = 未授权任何会话（默认，最安全） |
+| `sessions` | **授权给的会话 id 数组**；与 `workspaces` 都空 = 未授权（默认，最安全） |
+| `workspaces` | **授权给的工作区路径数组**（规范路径）；其下所有会话默认可用，含新增 |
 | `path` | 仅 `directory`：授权的绝对路径 |
 | `enabled` | 启用/禁用（**白名单**：false 就不给启动） |
 | `description` | 一句话说明，会显示在给 Agent 的列表里 |
@@ -167,15 +168,16 @@ Blender 的 `exclusive` 故意留空：它启动瞬间 GPU 利用率通常很低
 | --- | --- |
 | 顶部 | **全局开关**（控制插件是否生效）+ 刷新 + 恢复默认配置 + 配置文件路径；未授权条目数 / 待迁移工作区提示 |
 | 资源条 | GPU 利用率/显存、CPU、内存、占用 GPU 的进程 |
-| 条目卡片 | 名称、kind 徽章（软件/脚本/目录）、用途说明、启动路径或目录路径、状态徽章、门控结论、**会话授权徽章**（未授权 / 已授权 N 个会话）、资源需求、日志折叠 |
+| 条目卡片 | 名称、kind 徽章（软件/脚本/目录）、用途说明、启动路径或目录路径、状态徽章、门控结论、**授权徽章**（未授权 / 已授权 N 个会话 / 工作区 ×N）、资源需求、日志折叠 |
 | 卡片操作 | **启动 / 停止 / 验证 / 编辑 / 删除 / 授权**（目录条目无启动/停止/验证） |
-| 编辑表单 | **类型选择（软件/脚本/目录）**、名称、id、用途说明、启动路径或脚本路径或目录路径、脚本解释器、工作目录、参数、环境变量、四项资源阈值、互斥组、就绪探针、超时、启用开关、**会话授权选择器** |
+| 编辑表单 | **类型选择（软件/脚本/目录）**、名称、id、用途说明、启动路径或脚本路径或目录路径、脚本解释器、工作目录、参数、环境变量、四项资源阈值、互斥组、就绪探针、超时、启用开关、**会话授权选择器 + 工作区授权选择器** |
 | 添加 | 顶部三个按钮 **「添加软件 / 添加脚本 / 添加目录」**，各自展开对应表单，id 留空自动从名称生成 |
 | 底部 | **授权记录**折叠区（审计） |
 
 - 「用途说明」是写**给 AI 看**的，会进到 `app_list` 的结果里，让 Agent 明白这个软件做什么；
 - 资源阈值留空 = 该项不参与门控；
-- **会话授权**：表单底部 / 卡片「授权」按钮 / 会话标题旁「本会话授权」入口，都能勾选把条目授权给哪些会话；
+- **授权**：表单底部 / 卡片「授权」按钮 / 会话标题旁「本会话授权」入口，都能勾选把条目授权给哪些会话；
+  授权弹框与表单还带**工作区选择器**——勾选工作区＝其下所有会话（含新增）默认可用；
 - 「启动路径」旁有**内置文件浏览器**：逐层进入目录，`.exe` / `.bat` / `.cmd` / `.ps1` / `.py` / `.sh`
   会高亮并能点选回填（宿主没有原生「选文件」对话框，这里用 `uiWorkspace.listDirectory` 自己实现）；
 - 「启动时的当前目录」收在**高级选项**里，默认留空。
@@ -197,10 +199,11 @@ Blender 的 `exclusive` 故意留空：它启动瞬间 GPU 利用率通常很低
 所以：**能留空就留空**（默认用 exe 所在目录）。只有脚本依赖相对路径基准、或引擎要从
 exe 所在目录加载同目录 DLL 时才填。
 
-## 六点五、统一条目池 + 按会话授权（poolVersion 2）
+## 六点五、统一条目池 + 按会话/工作区授权（poolVersion 2）
 
-> 2026-11-14 起（T24 权限收缩）：**不再有全局 / 工作区授权层**。
-> 旧的「全局 / 工作区 / 会话」三级并集模型已废除，改为**一个统一条目池，每条目按会话授权**。
+> 2026-11-14 起（T24 权限收缩）：**不再有全局授权层**。
+> 旧的「全局 / 工作区 / 会话」三级并集模型已废除，改为**一个统一条目池，每条目按会话或工作区授权**。
+> 随后补上**工作区级授权**：授权一个工作区＝它名下的所有会话（含之后新增的）默认可用该条目。
 
 ### 统一条目池
 
@@ -213,26 +216,41 @@ exe 所在目录加载同目录 DLL 时才填。
 | `script` | 脚本（`.ps1`/`.bat`/`.cmd`/`.py`/`.js`/`.mjs`/`.cjs`/`.sh`/`.vbs`/`.jar`） | `launch.exe`=脚本路径，`launch.interpreter` 可选 |
 | `directory` | 授权目录（Agent 可读写、设置页可浏览的范围） | `path`（绝对路径） |
 
-每个条目带一个 **`sessions: [会话id, …]`** 数组——**这就是授权本身**：
+每个条目带两个授权数组——**这就是授权本身**：
 
-- 一个会话只能看到 / 启动 `sessions` 里**包含自己 id** 的条目；
-- `sessions: []` = **未授权任何会话**（默认，最安全）——任何 Agent 都看不到、起不了；
-- 目录条目同样按 `sessions` 授权：会话可见的目录 = 它被授权的目录条目的 `path`，再并上
+- **`sessions: [会话id, …]`**：会话只能看到 / 启动 `sessions` 里**包含自己 id** 的条目；
+- **`workspaces: [工作区路径, …]`**：会话**所属工作区**（按规范路径 `pathKey` 归一比较）在列表里，也可见——
+  **授权工作区是动态的**：该工作区下之后新增的会话自动可见，不需要重新勾选；
+- 两者**任一命中**即可见；`sessions` 与 `workspaces` **都空** = 未授权（默认，最安全）——任何 Agent 都看不到、起不了；
+- 目录条目同样按这两个数组授权：会话可见的目录 = 它被授权的目录条目的 `path`，再并上
   该会话可见程序自己的 `allowedDirs`。
 
 ### 可见性 / 管理面
 
 | 视角 | 看到什么 |
 |---|---|
-| **设置页（管理面）** | 全部条目（不管授权给谁）——人在这里增删改、勾选授权给哪些会话 |
-| **某会话的 Agent** | 只看到 `sessions` 含该会话 id 的条目；`app_list` 另附该会话已授权的目录 |
+| **设置页（管理面）** | 全部条目（不管授权给谁）——人在这里增删改、勾选授权给哪些会话/工作区 |
+| **某会话的 Agent** | 只看到 `sessions` 含该会话 id、**或所属工作区在 `workspaces` 里**的条目；`app_list` 另附该会话已授权的目录 |
 | **拿不到会话 id** | **fail-closed**：什么都看不到（绝不退化成管理面） |
 
-### 会话选择器
+会话→所属工作区的映射由宿主 `workspaceRegistry` 提供（`setWorkspaceResolver`：遍历工作区找
+`sessionIds` 命中）；解析不到工作区时只按 `sessions` 判定。
 
-编辑条目或点卡片上的「授权」，会弹出会话选择器：列出宿主里的会话（标题 / 时间 / 是否在线 /
-是否子代理），勾选即授权。数据源是宿主 `sessionQuery` 服务（`listSessions` + `readTitleSnapshots`）；
-没有该服务时降级用 `workspaceRegistry` 的会话列表（无标题），再没有就空列表。上限 300 条。
+### 会话 / 工作区选择器
+
+编辑条目或点卡片上的「授权」，弹框分两段：
+
+- **按会话授权**：列出宿主里的会话（标题 / 时间 / 是否在线 / 是否子代理），勾选即授权。
+  数据源是宿主 `sessionQuery` 服务（`listSessions` + `readTitleSnapshots`）；没有该服务时降级用
+  `workspaceRegistry` 的会话列表（无标题），再没有就空列表。上限 300 条。
+- **按工作区授权**：列出宿主 `workspaceRegistry` 的工作区（名称 / 路径 / 会话数），勾选即把整个
+  工作区授权给该条目。数据源 `GET /workspaces`（`listWorkspaces`）。
+
+两段一次保存（`POST /config/entry-grants`）。会话顶部「授权」按钮 / 会话「...」菜单的「本会话授权」
+面板则是逐条目开关，快速把条目授权给当前会话（`POST /config/entry-sessions`）。
+
+> 弹框用 `react-dom` `createPortal` 挂到 `document.body`：会话标题动作带会裁剪 overflow
+> （slot 契约「overlays must portal」），内联覆盖层会被裁掉导致「弹框打不开」。
 
 ### 从旧模型迁移（自动，一次性）
 
@@ -260,17 +278,17 @@ exe 所在目录加载同目录 DLL 时才填。
 npm run verify        # 串起全部 7 个测试文件
 ```
 
-不需要重启 DSH，全部用假依赖覆盖 **218 项**数值断言 + 门面完整性 + 渲染冒烟：
+不需要重启 DSH，全部用假依赖覆盖 **244 项**数值断言 + 门面完整性 + 渲染冒烟：
 
 | 文件 | 项数 | 覆盖 |
 | --- | --- | --- |
-| `verify.mjs` | 136 | 采样解析、门控纯函数、互斥、配置归一化、运行时端到端、只停自己的进程、tool 契约、HTTP 同源；**poolVersion 2**：kind/sessions 归一化、目录校验、脚本解释器推导、buildCommand 脚本、表单互转、工具层 fail-closed |
+| `verify.mjs` | 137 | 采样解析、门控纯函数、互斥、配置归一化、运行时端到端、只停自己的进程、tool 契约、HTTP 同源；**poolVersion 2**：kind/sessions/workspaces 归一化、目录校验、脚本解释器推导、buildCommand 脚本、表单互转、工具层 fail-closed |
 | `scopes.mjs` | 19 | 审计存储、可见性（管理面/会话/空 sid fail-closed）、setEntrySessions、currentConfig、CRUD 落盘读回、旧模型迁移 |
-| `workspace-scope.mjs` | 31 | expandWorkspaceGrants（展开/作废/审计）、listSessions（sessionQuery/降级/none/cap 300） |
+| `workspace-scope.mjs` | 56 | expandWorkspaceGrants（展开/作废/审计）、listSessions（sessionQuery/降级/none/cap 300）；**工作区授权**：sessions OR workspaces 可见性、pathKey 归一、目录条目、setEntryGrants/setEntryWorkspaces 审计、listWorkspaces、unauthCount 双空 |
 | `hot-reload.mjs` | 13 | 授权/增删条目热可见、别的会话不受影响、快照缓存不挡授权变更、enabled 挂/卸 tool |
 | `lazy.mjs` | 19 | 懒加载快照不采样/不探针/不污染缓存 |
 | `facade.mjs` | — | http 用到的 runtime 成员都已由 index.js 门面转发 |
-| `render.mjs` | 14 用例 | 真渲染到表单/卡片/会话组件/系统卡/**整面板**的**加载完成分支**（按组件实例分派 hook、每个 effect 独立跑），含**反向验证**（改坏组件名确认测试会报错，防假通过） |
+| `render.mjs` | 17 用例 | 真渲染到表单/卡片/会话/工作区组件/系统卡/**整面板**的**加载完成分支**（按组件实例分派 hook、每个 effect 独立跑），含**点击授权按钮真弹框 + createPortal 断言**与**反向验证**（改坏组件名确认测试会报错，防假通过） |
 
 ## 八、已知边界
 
@@ -315,10 +333,10 @@ require——build 的入参/返回值就是模块接口。依赖方向无环：
 | --- | --- | --- |
 | `client.i18n.js` | 文案字典 zh / en | — |
 | `client.core.js` | 常量 + 样式 S + 纯函数（格式化 / HTTP / 提示色） | — |
-| `client.hooks.js` | useStatus / useConfig / useSessions | React, core |
-| `client.controls.js` | Pill / Field / TextInput / TextArea / ErrorBoundary / Switch / Modal | React, h, core |
+| `client.hooks.js` | useStatus / useConfig / useSessions / useWorkspaces | React, core |
+| `client.controls.js` | Pill / Field / TextInput / TextArea / ErrorBoundary / Switch / Modal（createPortal） | React, ReactDOM, h, core |
 | `client.cards.js` | AppCard / DirectoryCard / SystemCard | h, core, controls |
-| `client.sessions.js` | SessionPicker / SessionAuthDialog / SessionGrantPanel / GrantsLog | React, h, core, controls, hooks |
+| `client.sessions.js` | SessionPicker / WorkspacePicker / SessionAuthDialog / SessionGrantPanel / GrantsLog | React, h, core, controls, hooks |
 | `client.form.js` | emptyForm / toForm / fromForm / ProgramForm | React, h, core, controls, sessions |
 | `client.panel.js` | LauncherSection / 会话入口按钮 / 插件栏图标 / 主面板 | React, h, core, controls, cards, sessions, form, hooks, ctxGet |
 
