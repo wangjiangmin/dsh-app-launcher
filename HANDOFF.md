@@ -1,30 +1,36 @@
 # 交接文档：dsh-app-launcher（显示名：本地授权）
 
-> 更新 2026-11-14 · 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
+> 更新 2026-11-14（T24 权限重构已完成，commit `b273496`）· 取代 11/9 版（旧版在 git `7fd7ce9`）· 给新会话接手用
 > 来源会话「资源监控与软件自启动插件方案」= `session-2be05f3c-fa59-4574-8127-b502bcf27867`
 > （2026-11-08 19:57 → 11-14 01:00，27 轮，1269 次工具调用；上下文 ~1,048,365 tokens 溢出而死）。
 > 原始日志：`C:\Users\wjm\.dsh\sessions\--D-wjm-Documents-deepseek-harness-default-workspace--\session-2be05f3c-fa59-4574-8127-b502bcf27867\session.v4.jsonl.zstd`（多帧 zstd，按 magic `28 B5 2F FD` 切帧解）。
 
 ---
 
-## 〇、一句话现状与置顶未完成项
+## 〇、一句话现状
 
 插件**已安装可用**：desktop profile bundles 已选中、Junction 链接指向工作区、用户层配置在位、
-**183 项逻辑测试全绿** + 门面/渲染测试、git HEAD `d897803`、工作区干净。
+**218 项逻辑测试全绿** + 门面/渲染测试、git HEAD `b273496`、工作区干净。
 
-**★ 置顶未完成 = 用户最后一条需求（TURN 24，11-14 00:10），一行代码都没写：**
+**★ T24 权限重构已完成（2026-11-14，commit `b273496`，21 文件 +2173/−1307）。** 用户最后一条需求：
 
 > 「1. 收缩权限 , 不允许全局开发授权.将目录合并到软件/脚本这个面板上,更新为 `软件/脚本/目录`面板,进行统一管理. 2. 每一条`软件/脚本/目录`的面板上添加一个会话授权,可选择授权给那个会话.」
 
-- 已确认代码无痕迹（grep `软件/脚本/目录|会话授权` 零命中），git 停在 `d897803`。
-- 会话里唯一动作：`cordis_inspect_query listConfigs` 返回的是**配置目录不是会话列表**（不对路）。
-- 下一步原计划：查宿主 `sessions` / `sessionQuery` 服务拿会话列表（会话选择器的前置依赖）。
-- 设计草案（仅推理）：统一条目池，每条带 `sessions:[…]` 授权列表；取消全局授权层；未授权条目对会话默认不可见。
-- 注意与现行三级作用域模型（§三）的关系：这是用户对权限模型的**再次重构**，方向是收缩而非扩张。
+已落地（详见 §三「四代」与 README §六点五）：
+- **统一条目池**（poolVersion 2）：`programs[]` 里每条带 `kind=program/script/directory` + `sessions:[会话id]`；
+  `sessions=[]`=未授权任何会话（默认最安全），会话只见 `sessions` 含自己的条目。
+- **取消全局授权层**：`setGlobal` 收到 `allowedDirs` 直接报错；旧全局目录迁移成 `sessions=[]` 的目录条目（收缩，需重新勾选）。
+- **每条目会话授权**：设置页表单底部 / 卡片「授权」按钮 / 会话标题旁「本会话授权」入口，三处都能勾选；
+  会话选择器数据源＝宿主 `sessionQuery`（`listSessions`+`readTitleSnapshots`），降级 `workspaceRegistry`。
+- 旧会话切片授权折进 `sessions[]`；工作区切片由 `workspaceRegistry` 就绪后展开成名下会话授权（`expandWorkspaceGrants`）。
+- `scopes.json` 只留 `grants` 审计；迁移一次性，重启不重复。
 
-**会话死因**：T26 `/compact` 未真正压缩（只输出一段中途截断的文本，无 compress 调用）；
-T27 切模型后首 attempt 即 `400 … "Range of input length should be [1, 983616]"`，code=CONTEXT_WINDOW_EXCEEDED。
-**新会话不要试图复活旧会话，直接以本文档接手。**
+**⚠️ 用户侧待验证**：host 改动需**重启 DSH**、client 改动需**刷新浏览器**才生效（Junction 磁盘代码已即时最新）。
+重启后旧 config.json（poolVersion 1）会自动迁移成 2，4 个出厂程序变成 `sessions=[]`（未授权）——
+**这是收缩的本意**：用户需在设置页把它们勾选授权给相应会话，Agent 才能看到/启动。
+
+**会话死因（旧会话）**：T26 `/compact` 未真正压缩；T27 切模型后 `400 … "Range of input length should be [1, 983616]"`，
+code=CONTEXT_WINDOW_EXCEEDED（~1,048,365 tokens）。**新会话不要试图复活旧会话，直接以本文档接手。**
 
 ---
 
@@ -36,10 +42,11 @@ T27 切模型后首 attempt 即 `400 … "Range of input length should be [1, 98
 | 安装 | `C:\Users\wjm\.dsh\profiles\desktop\node_modules\dsh-app-launcher`（Junction → 工作区，代码即时生效） |
 | profile | `C:\Users\wjm\.dsh\profiles\desktop\package.json`：bundles 含 `dsh-app-launcher`；dependencies `link:D:/wjm/Documents/deepseek-harness/default-workspace/dsh-app-launcher` |
 | 用户层配置 | `C:\Users\wjm\.dsh\app-launcher\config.json`（patch 只当出厂种子） |
-| 作用域存储 | `C:\Users\wjm\.dsh\app-launcher\scopes.json`（`{version, workspaces[<路径>], sessions[<id>], grants}`，MAX_GRANTS=500） |
+| 作用域存储 | `C:\Users\wjm\.dsh\app-launcher\scopes.json`（poolVersion 2 后**只留 `grants[]` 审计**，MAX_GRANTS=500；旧 workspaces/sessions 切片迁移后清空） |
 | 启动日志 | `C:\Users\wjm\.dsh\app-launcher\comfyui.log` 等（插件侧诊断也落盘，不再 0 字节） |
 
 **git 全链（新→旧）**：
+`b273496` ★T24 权限收缩（统一条目池+按会话授权，poolVersion 2）→ `59994b9` HANDOFF 更新至 11/14 →
 `d897803` 主页插件栏入口 → `3cd6a54` 忽略提交信息临时文件 → `1f67669` 授权热加载两阻断 bug →
 `6eecc48` 懒加载+改名本地授权+弹框 → `fc990ec` 「本会话应用」改名「授权」 → `5140aa2` 工作区入口位置修复 →
 `e8b9154` 三级作用域授权+三入口+弹框 → `de42ef7`/`5d15f51`/`54a7d60`/`9949293`/`fdde6e2`/`b367aef`/`3c03449`/`e999c71`
@@ -71,11 +78,19 @@ T27 切模型后首 attempt 即 `400 … "Range of input length should be [1, 98
 
 ---
 
-## 三、授权模型三代演进（理解 T24 重构的前提）
+## 三、授权模型四代演进（理解现行 poolVersion 2 的前提）
 
 1. **一代**：全局 allowedDirs 总表 → 被用户否定：「授权目录应该是跟着软件走的」。
 2. **二代**：per-program allowedDirs（生效＝程序自己的 ∪ 全局兜底）；路径**边界**比较（`C:\Apps2` 不被 `C:\Apps` 放行）；空名单一律拒绝；相对路径抛 ConfigValidationError。
-3. **三代（e8b9154，现行）**：global/workspace/session 三级。目录＝三层并集去重；程序同 id 后者覆盖（会话>工作区>全局），`app_list` 标来源层。**工作区 key 用 canonical 目录路径不用 workspaceId**（工作区可删后重建，用 id 会丢授权）。不照搬参考项目 `dsh-sandbox-allowlist` 的沙箱 hook（单层白名单），只借「可视化编辑+实时生效」。
+3. **三代（e8b9154，已被四代取代）**：global/workspace/session 三级并集。目录三层并集；程序同 id 后者覆盖。工作区 key 用 canonical 路径不用 workspaceId。
+4. **四代（b273496，现行 poolVersion 2）**：用户 T24 要求**收缩**——取消全局/工作区层，改**统一条目池 + 每条目按会话授权**。
+   - 条目 `kind=program/script/directory`，各带 `sessions:[会话id]`；`sessions=[]`=未授权（默认）。
+   - 可见性：`_scopeContext===null`=管理面（设置页看全部）；`withAgentScope` 设 `{sessionId}`→只留 `sessions.includes(sid)`；`sid===''` fail-closed（`_visibleEntries` runtime.mjs:479）。
+   - `visiblePrograms()` 排除 directory；`visibleDirectories()` 只 directory；`allowedDirsOf`=程序自身 dirs ∪ 可见目录条目 path。
+   - 快照缓存键按视角分 `admin` / `session:<sid>`（管理面与会话面不互用）。
+   - 迁移 `_migratePool()`（runtime.mjs:94）：全局目录→sessions=[] 目录条目；会话切片折进 sessions[]；工作区切片暂存 `_pendingWorkspaceGrants`，`expandWorkspaceGrants`（:203）由 index.js 的 workspaceRegistry inject 展开。
+   - 会话选择器：`setSessionQuery`/`listSessions()`（:326，cap 300，标题走 readTitleSnapshots）；HTTP `GET /sessions`、`POST /config/entry-sessions`；删 `/scope`、`/config/allowed-dirs`。
+   - 脚本：`buildCommand` 按 `launch.interpreter` 或扩展名推导解释器（SCRIPT_INTERPRETERS 表 config.mjs）；运行状态按解释器进程名探测 `detectProcessName`（.bat/.cmd 无法按名识别、同解释器串名——已知限制）。
 
 **热加载（1f67669）**：修了两个阻断 bug——① `withScope` 只定义从未调用 → 会话/工作区授权对 Agent 完全不生效；② `setScopeSlice('global')` 静默丢 `slice.programs`。
 修后：`withAgentScope` 从 `exec.agent.id`(=SessionId) 经宿主 `workspaceRegistry` resolver 补工作区路径再执行；写入即清 `snapshotCache`（清理点约 runtime.mjs 243/260 行）；`app_start` 的长等待 `waitStart` 也在作用域内。语义：设置页保存→下一次工具调用立即生效；撤销同样立即失效。
@@ -94,12 +109,13 @@ lib/ index.js(入口/门面★必须显式转发每个新方法) config.mjs stor
      gate.mjs sysinfo.mjs programs.mjs(★buildChildEnv) status.mjs http.mjs tools.mjs
      runtime.mjs scopes.mjs verify.mjs
 client/client.js（手写客户端插件；ErrorBoundary 外层包分区+内层包每表单；Modal 弹框表单）
-test/ verify.mjs(121) scopes.mjs(14) workspace-scope.mjs(12) lazy.mjs(19) hot-reload.mjs(17)
-      facade.mjs(静态核对面面转发) render.mjs(真渲染+用例4/5 slot 注册与 key 配对)
+test/ verify.mjs(136) scopes.mjs(19) workspace-scope.mjs(31) lazy.mjs(19) hot-reload.mjs(13)
+      facade.mjs(静态核对面面转发) render.mjs(按组件实例分派 hook 真渲染到加载分支+反向验证，12 用例)
 ```
 
-跑测试：`npm run verify`（package.json scripts.verify 串起全部 7 个）。183 项逻辑全绿（121+14+12+19+17）。
-render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceError），否则假通过。
+跑测试：`npm run verify`（package.json scripts.verify 串起全部 7 个）。**218 项逻辑全绿**（136+19+31+19+13）+ facade + render。
+render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceError），否则假通过；v4 已修「全局 hookStore 让嵌套组件 hook 互踩」与「children 没进 props 导致子组件没渲染」两个假通过隐患。
+**工具 execute 签名**：app_list/system_status 是 `execute(exec)` 单参；app_start/app_stop/app_verify/app_toggle 是 `execute(args, exec)` 双参（写测试别搞混）。
 
 ---
 
@@ -120,10 +136,10 @@ render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceE
 
 ## 六、Open items（按优先级）
 
-1. **★ T24 权限重构**（§〇）：取消全局授权层；「软件/脚本/目录」统一面板；每条目按会话授权。前置：宿主会话列表 API（listConfigs 不对路，查 sessions/sessionQuery）。
+1. **★ 用户侧验证 T24**：重启 DSH + 刷新浏览器 → 旧 config 自动迁移 poolVersion 2 → 设置页「软件/脚本/目录」把 4 个出厂程序勾选授权给相应会话 → 会话内 `app_list` 应只见已授权条目；不重开会话经「授权」加会话后再 `app_list` 应即时见变化（热加载）。
 2. **5 秒 MiniMax H3 视频**（TURN 7 起遗留）：工作流 `F:\program\ComfyUI\user\default\workflows\my_video_minimax_h3_t2v.json`（UI 图含子图「Image to Video (MiniMax H3)」21 节点，**子图不支持提取**；路径①请用户在面板转回普通节点再提取，②手工拼 API）。**模型名待用户拍板**：工作流写 `minimax_h3_fl2va_pruned_int8_convrot` / `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16`，本机实有 `minimax_h3_fl2va_pruned_fp8_scaled`(19.52GB, H:\apps\ComfyUI\models\diffusion_models) / `minimax_h3_turbo_v4_step600_ema_pruned_comfyui`(0.58GB, loras)。5 秒=124 帧@24fps（17k+5 网格对齐）。MiniMaxH3ImageToVideo 签名：clip/vae/prompt/width(1344,step32)/height(768)/length，optional first_frame/last_frame。
 3. **TURN 8 INBOX 从未处理**：「清理旧版 comfyui 是否有问题? 没有问题就删除了.同时记得更新相关记忆.」——旧后端 `C:\Users\wjm\AppData\Local\Programs\ComfyUI\resources\ComfyUI` 是 0.17.1 过时路径；未删、未写记忆。
-4. **用户侧验证待做**：11/13 的 host 改动需重启 DSH+刷新；验证法＝会话内 `app_list` → 经「🔐 授权」加程序 → 不重开会话再 `app_list` 应见新条目。
+4. （已完成）T24 权限重构：见 §〇 / §三四代，commit `b273496`。
 5. （已被取代）工作区标题菜单授权按钮：无 slot，用户已接受插件栏方案。
 
 ---
@@ -144,4 +160,4 @@ render.mjs 必须**反向验证**（故意改坏组件名确认会报 ReferenceE
 - Mnemon Documents（本项目记录，搜索关键词 dsh-app-launcher）：`f1d86363` 三级作用域、`ae6c68ed` 工作区 resolver、`5b1271a3` 热加载+懒加载、`c7b4e112` 插件栏入口。
 - `C:\Users\wjm\.dsh\AGENTS.md`「DSH 插件开发实测踩坑清单」。
 - 底座参考：本机 `dsh-ninfer-autostart`（C:\Users\wjm\.dsh\local-plugins\，覆盖 ~80% 机制，单引擎短板）；外部 `developerdh/dsh-sandbox-allowlist`（仅借思路）。
-- 会话时间线：T1–4(11/8) 调研+首版+配置可编辑+Blender；T5–10(11/8夜–11/9) 安装半完成修复/Blender 实测+手机模型交付/ComfyUI 启动苦战/授权目录；T11–16(11/9) 三点整改/白屏/记忆/git 化/ELECTRON 根因/旧 HANDOFF；T17(11/13) 三级作用域；T18–23(11/13) 入口纠偏/懒加载/改名/热加载/插件栏；T24–27(11/14) 权限重构需求→溢出。
+- 会话时间线：T1–4(11/8) 调研+首版+配置可编辑+Blender；T5–10(11/8夜–11/9) 安装半完成修复/Blender 实测+手机模型交付/ComfyUI 启动苦战/授权目录；T11–16(11/9) 三点整改/白屏/记忆/git 化/ELECTRON 根因/旧 HANDOFF；T17(11/13) 三级作用域；T18–23(11/13) 入口纠偏/懒加载/改名/热加载/插件栏；T24(11/14 00:10) 权限重构需求→旧会话溢出；**T24 实现于 11/14 新会话完成（b273496）**。
